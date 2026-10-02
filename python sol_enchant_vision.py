@@ -100,6 +100,7 @@ DRY_RUN = False
 
 ENABLE_INVENTORY_ACTION = True
 ENABLE_SHOP_ACTION = False
+ENABLE_HOME_ACTION = False
 
 
 
@@ -1363,6 +1364,86 @@ def verify_inventory(frame):
 
 
 # ============================================================
+# HOME VERIFY
+# ============================================================
+
+
+HOME_VERIFY_PROMPT = """
+
+Is the player currently in the actual town/home/base area?
+
+Return ONLY one line.
+
+Format:
+
+YES|0.95
+
+or
+
+NO|0.95
+
+YES when the player is in the town/base/home area with the
+town environment, NPCs, buildings, or other clear town context.
+
+NO when:
+- an active battle/combat scene is visible
+- the player is in the hunting/field area
+- inventory/equipment is open
+- a merchant shop is open
+- a general menu is open
+
+A town screen must be distinguished from active combat.
+If there is any active combat indicator or battle scene, return NO.
+
+If uncertain, return NO.
+
+Do not add explanations.
+"""
+
+
+def verify_home(frame):
+
+    try:
+        result = ollama_chat(
+            HOME_VERIFY_PROMPT,
+            image=frame
+        )
+
+        text = (
+            result
+            .get("message", {})
+            .get("content", "")
+        )
+
+        print("[HOME RAW]", text)
+
+        m = YES_NO_RE.search(text)
+
+        if not m:
+            return False
+
+        yes = m.group(1).upper() == "YES"
+
+        conf = float(m.group(2))
+
+        if conf > 1:
+            conf /= 100
+
+        accepted = (
+            yes
+            and conf >= INVENTORY_MIN_CONFIDENCE
+        )
+
+        print("[HOME]", accepted, conf)
+
+        return accepted
+
+    except Exception as e:
+        print("[HOME ERROR]", e)
+        return False
+
+
+# ============================================================
 # SHOP VERIFY
 # ============================================================
 
@@ -1947,6 +2028,38 @@ class VLMWorker:
 
 
         inventory_verified = False
+        shop_verified = False
+        home_verified = False
+
+
+        if state == "HOME":
+
+            home_verified = verify_home(frame)
+
+            if not home_verified:
+
+                print("[HOME rejected]")
+
+                state = "NORMAL"
+                confidence = 0.8
+
+
+        if state == "BATTLE":
+
+            # Town can be mistaken for BATTLE by the broad state
+            # classifier. Verify the town separately before allowing
+            # BATTLE to become confirmed.
+
+            home_verified = verify_home(frame)
+
+            if home_verified:
+
+                print(
+                    "[STATE OVERRIDE] BATTLE -> HOME"
+                )
+
+                state = "HOME"
+                confidence = 0.95
 
 
         if state == "INVENTORY":
@@ -1956,6 +2069,8 @@ class VLMWorker:
             # can otherwise mistake it for the inventory screen.
 
             if verify_shop(frame):
+
+                shop_verified = True
 
                 print(
                     "[STATE OVERRIDE] INVENTORY -> SHOP"
@@ -1997,6 +2112,26 @@ class VLMWorker:
                 print(
                     "[STATE CHANGE]",
                     "SHOP"
+                )
+
+        elif state == "HOME" and home_verified:
+
+            confirmed = "HOME"
+
+            changed = (
+                self.stabilizer.confirmed
+                !=
+                "HOME"
+            )
+
+            self.stabilizer.confirmed = "HOME"
+            self.stabilizer.previous = "HOME"
+            self.stabilizer.count = 0
+
+            if changed:
+                print(
+                    "[STATE CHANGE]",
+                    "HOME"
                 )
 
         elif inventory_verified:
@@ -2077,6 +2212,15 @@ class VLMWorker:
         ):
 
             print("[ACTION] SHOP detected - no action")
+
+            return
+
+        if (
+            confirmed == "HOME"
+            and not ENABLE_HOME_ACTION
+        ):
+
+            print("[ACTION] HOME detected - no action")
 
             return
 
