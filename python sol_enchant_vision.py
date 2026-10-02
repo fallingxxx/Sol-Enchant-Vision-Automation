@@ -1562,6 +1562,51 @@ def detect_state(frame):
         return ""
 
 
+STATE_RE = re.compile(
+    r"^\\s*(NORMAL|BATTLE|MENU|INVENTORY|SHOP|HOME|UNKNOWN)"
+    r"\\s*(?:[|:]\\s*)?"
+    r"(100(?:\\.\\d+)?|[0-9]{1,2}(?:\\.\\d+)?)?"
+    r"\\s*%?\\s*$",
+    re.I,
+)
+
+
+def parse_state(raw):
+    """Parse the state VLM response without ever inventing a state."""
+    if raw is None:
+        return None, 0.0
+
+    text = str(raw).strip()
+
+    if not text:
+        return None, 0.0
+
+    match = STATE_RE.match(text)
+
+    if not match:
+        return None, 0.0
+
+    state = match.group(1).upper()
+    confidence_raw = match.group(2)
+
+    if confidence_raw is None:
+        # The model's STATE_PROMPT allows a confidence value, but tolerate
+        # a plain state response conservatively rather than guessing high.
+        confidence = 0.55 if state != "UNKNOWN" else 0.0
+    else:
+        confidence = float(confidence_raw)
+        if confidence > 1.0:
+            confidence /= 100.0
+
+    if state == "UNKNOWN":
+        return None, 0.0
+
+    if not 0.0 <= confidence <= 1.0:
+        return None, 0.0
+
+    return state, confidence
+
+
 def detect_target(
     frame,
     inventory=False,
