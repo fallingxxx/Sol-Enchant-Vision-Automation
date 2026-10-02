@@ -1311,31 +1311,75 @@ def verify_inventory(frame):
 
 def parse_target(raw):
 
+    if not raw:
+        return None
+
+    text = raw.upper()
+
+    # BACK ACTION
+    if "BACK" in text:
+        return {
+            "action": "back",
+            "reason": "model requested back"
+        }
+
+    if "NONE" in text:
+        return None
+
+    m = TARGET_RE.search(raw)
+
+    if not m:
+        return None
+
+    x = int(m.group(1))
+    y = int(m.group(2))
+    conf = float(m.group(3))
+
+    if conf > 1:
+        conf /= 100
+
+    reason = m.group(4).strip()
+
+    if not (
+        0 <= x < VISION_WIDTH
+        and
+        0 <= y < VISION_HEIGHT
+    ):
+        print("[TARGET] invalid coordinate")
+        return None
+
+    if conf < TARGET_MIN_CONFIDENCE:
+        return None
+
+    ax, ay = vision_to_adb(x, y)
+
+    return {
+        "vision_x": x,
+        "vision_y": y,
+        "adb_x": ax,
+        "adb_y": ay,
+        "confidence": conf,
+        "reason": reason,
+    }
+
+
 def detect_target(
     frame,
     inventory=False
 ):
 
-
     try:
 
-
         prompt = (
-
             INVENTORY_TARGET_PROMPT
-
             if inventory
-
             else TARGET_PROMPT
-
         )
-
 
         result = ollama_chat(
             prompt,
             image=frame
         )
-
 
         raw = (
             result
@@ -1343,156 +1387,33 @@ def detect_target(
             .get("content", "")
         )
 
-
         print(
             "[TARGET RAW]",
             raw
         )
 
-
-        target = parse_target(
-            raw
-        )
-
+        target = parse_target(raw)
 
         if target:
-
             print(
                 "[TARGET FOUND]",
                 target
             )
-
         else:
-
             print(
                 "[TARGET NONE]"
             )
 
-
         return target
 
-
-
     except Exception as e:
-
 
         print(
             "[TARGET ERROR]",
             e
         )
 
-
         return None
-
-
-    if not raw:
-
-        return None
-
-
-
-    text = raw.upper()
-
-
-
-    # BACK ACTION
-    if "BACK" in text:
-
-        return {
-            "action": "back",
-            "reason": "model requested back"
-        }
-
-
-
-    if "NONE" in text:
-
-        return None
-
-
-
-    m = TARGET_RE.search(
-        raw
-    )
-
-
-    if not m:
-
-        return None
-
-
-
-    x = int(
-        m.group(1)
-    )
-
-    y = int(
-        m.group(2)
-    )
-
-
-    conf = float(
-        m.group(3)
-    )
-
-
-    if conf > 1:
-
-        conf /= 100
-
-
-
-    reason = (
-        m.group(4)
-        .strip()
-    )
-
-
-
-    if not (
-        0 <= x < VISION_WIDTH
-        and
-        0 <= y < VISION_HEIGHT
-    ):
-
-        print(
-            "[TARGET] invalid coordinate"
-        )
-
-        return None
-
-
-
-    if conf < TARGET_MIN_CONFIDENCE:
-
-        return None
-
-
-
-    ax, ay = vision_to_adb(
-        x,
-        y
-    )
-
-
-
-    return {
-
-        "vision_x": x,
-
-        "vision_y": y,
-
-        "adb_x": ax,
-
-        "adb_y": ay,
-
-        "confidence": conf,
-
-        "reason": reason,
-
-    }
-
-
 
 
 # ============================================================
