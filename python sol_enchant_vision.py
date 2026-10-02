@@ -606,7 +606,9 @@ class VisionCapture:
 
             f"max_fps={VIDEO_MAX_FPS} "
 
-            f"video_bit_rate={VIDEO_BIT_RATE}"
+            f"video_bit_rate={VIDEO_BIT_RATE} "
+
+            f"video_encoder=c2.android.avc.encoder"
 
         )
 
