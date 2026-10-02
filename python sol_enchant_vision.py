@@ -2360,80 +2360,36 @@ class VLMWorker:
             raw = None
 
             # UI title OCR is deterministic evidence for inventory/shop.
+            # SHOP is a deterministic OCR state: do not call the VLM inventory
+            # verifier and do not return before the action router.
             if ocr_hits and any(hit[1] == "UI_TITLE" for hit in ocr_hits):
-                # The title OCR is strong evidence, but it can confuse the
-                # tiny Korean INVENTORY title with SHOP. Do not return early
-                # on a SHOP title. Verify INVENTORY first so the visual
-                # verifier gets a chance to correct the OCR result.
-                if state == "SHOP":
-                    # A confirmed INVENTORY state is allowed to leave only
-                    # when the SHOP title is independently verified as a
-                    # real merchant screen. This prevents both directions of
-                    # false switching:
-                    #   SHOP -> INVENTORY from a generic inventory YES
-                    #   INVENTORY -> SHOP from a false OCR title.
-                    if self.stabilizer.confirmed == "INVENTORY":
-                        shop_candidate = verify_shop(frame)
-
-                        if shop_candidate is True:
-                            state = "SHOP"
-                        else:
-                            state = "INVENTORY"
-                    else:
-                        inventory_candidate = verify_inventory(frame)
-
-                        # The OCR title is repeatedly read as SHOP while the
-                        # inventory verifier returns false-positive YES on
-                        # the same merchant screen. Do not let a single VLM
-                        # YES overturn explicit SHOP evidence.
-                        state = "SHOP"
-
-                    confidence = 0.99
-                    self.cached_state_raw = None
-                    self.cached_state = state
-                    self.cached_state_confidence = confidence
-                    self.cached_state_time = now
-                    self.last_confirmed_state = state
-                    self.last_confirmed_confidence = confidence
-
-                    if state == "INVENTORY":
-                        self.stabilizer.confirmed = state
-                        self.stabilizer.previous = state
-                        self.stabilizer.count = 0
-
-                    print("[UI TITLE CONFIRMED]", state)
-
-                    # Do not return here. The state still needs to pass through
-                    # the normal confirmation/action router below. Returning
-                    # here skips [STATE CHANGE] and therefore skips SHOP -> BACK.
-                    # A positive NO is real evidence that the screen is SHOP.
-                    self.inventory_title_override_count = 0
-
-                    if self.stabilizer.confirmed == "INVENTORY":
-                        shop_candidate = verify_shop(frame)
-
-                        if shop_candidate:
-                            print("[STATE OVERRIDE] INVENTORY -> SHOP")
-                            state = "SHOP"
-                            confidence = 0.99
-                        else:
-                            state = "INVENTORY"
-                            confidence = 0.99
-                            self.cached_state_raw = None
-                            self.cached_state = state
-                            self.cached_state_confidence = confidence
-                            self.cached_state_time = now
-                            self.last_confirmed_state = state
-                            self.last_confirmed_confidence = confidence
-                            print("[UI TITLE RETAINED]", state)
-                            return state, confidence
-
                 self.cached_state_raw = None
                 self.cached_state = state
                 self.cached_state_confidence = confidence
                 self.cached_state_time = now
                 self.last_confirmed_state = state
                 self.last_confirmed_confidence = confidence
+
+                if state == "SHOP":
+                    changed = self.stabilizer.confirmed != "SHOP"
+                    self.stabilizer.confirmed = "SHOP"
+                    self.stabilizer.previous = "SHOP"
+                    self.stabilizer.count = 0
+                    self.inventory_title_override_count = 0
+
+                    print("[UI TITLE CONFIRMED] SHOP")
+
+                    if changed:
+                        print("[STATE CHANGE] SHOP")
+                        print("[CONFIRMED] SHOP")
+                        if ENABLE_SHOP_ACTION:
+                            print("[ACTION] SHOP -> BACK")
+                            self.executor.back()
+                    else:
+                        print("[CONFIRMED] SHOP")
+
+                    return
+
                 print("[UI TITLE CONFIRMED]", state)
                 return state, confidence
         else:
