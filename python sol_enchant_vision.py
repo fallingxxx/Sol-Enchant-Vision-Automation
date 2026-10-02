@@ -2332,28 +2332,26 @@ class VLMWorker:
                 # on a SHOP title. Verify INVENTORY first so the visual
                 # verifier gets a chance to correct the OCR result.
                 if state == "SHOP":
-                    inventory_candidate = verify_inventory(frame)
+                    # A confirmed INVENTORY state is allowed to leave only
+                    # when the SHOP title is independently verified as a
+                    # real merchant screen. This prevents both directions of
+                    # false switching:
+                    #   SHOP -> INVENTORY from a generic inventory YES
+                    #   INVENTORY -> SHOP from a false OCR title.
+                    if self.stabilizer.confirmed == "INVENTORY":
+                        shop_candidate = verify_shop(frame)
 
-                    # The OCR title is repeatedly read as SHOP while the
-                    # inventory verifier returns false-positive YES on the
-                    # same merchant screen. Do not let a single VLM YES
-                    # overturn explicit SHOP evidence.
-                    if inventory_candidate is None:
-                        if self.stabilizer.confirmed == "INVENTORY":
-                            state = "INVENTORY"
-                        else:
+                        if shop_candidate is True:
                             state = "SHOP"
-
-                    elif inventory_candidate is True:
-                        # Keep the explicit SHOP title unless INVENTORY has
-                        # already been independently confirmed. A transient
-                        # VLM YES is not sufficient to switch SHOP -> INVENTORY.
-                        if self.stabilizer.confirmed == "INVENTORY":
-                            state = "INVENTORY"
                         else:
-                            state = "SHOP"
-
+                            state = "INVENTORY"
                     else:
+                        inventory_candidate = verify_inventory(frame)
+
+                        # The OCR title is repeatedly read as SHOP while the
+                        # inventory verifier returns false-positive YES on
+                        # the same merchant screen. Do not let a single VLM
+                        # YES overturn explicit SHOP evidence.
                         state = "SHOP"
 
                     confidence = 0.99
