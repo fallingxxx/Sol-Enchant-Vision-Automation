@@ -52,7 +52,8 @@ ADB_HEIGHT = 720
 
 # VLM
 
-VISION_INTERVAL = 1.0
+VISION_INTERVAL = 0.5
+STATE_VLM_INTERVAL = 2.0
 
 VLM_TIMEOUT = 120
 
@@ -67,7 +68,7 @@ VLM_RETRY_DELAY = 0.5
 VLM_REQUEST_LOCK = threading.Lock()
 VLM_LAST_END_TIME = 0.0
 VLM_MIN_GAP = 2.0
-HOME_VERIFY_INTERVAL = 5.0
+HOME_VERIFY_INTERVAL = 3.0
 VLM_FAILURE_RESTART_THRESHOLD = 3
 
 
@@ -1056,15 +1057,13 @@ class VisionCapture:
 
 
 STATE_PROMPT = """
-Analyze this Sol Enchant screenshot.
+Analyze this Sol Enchant screenshot and classify the CURRENT MAIN SCREEN.
 
-Return exactly:
+Return the first line only in this exact format:
 
 STATE|confidence
 
-
 Allowed states:
-
 NORMAL
 BATTLE
 MENU
@@ -1073,34 +1072,23 @@ SHOP
 HOME
 UNKNOWN
 
+Priority rules:
+1. SHOP has priority over INVENTORY when a merchant/product interface is visible.
+2. INVENTORY means the player's own inventory/equipment/item-management screen.
+3. HOME means an actual town/base/home scene. Buildings, streets, NPCs,
+   town facilities or a clearly recognizable town/base context should be visible.
+4. "(안전)" means only a PK-disabled safe area. It is NOT proof of HOME.
+5. BATTLE requires actual active combat evidence such as enemy combat UI,
+   target/HP bars, damage numbers or an active attack scene.
+6. MENU is a large general menu panel that is not inventory or shop.
+7. NORMAL is ordinary field/gameplay without active combat.
+8. UNKNOWN if the screenshot is genuinely ambiguous.
 
-Rules:
-
-NORMAL:
-ordinary gameplay screen.
-
-BATTLE:
-active combat.
-
-MENU:
-large general menu panel.
-
-INVENTORY:
-large inventory/equipment/item management panel.
-
-SHOP:
-merchant shop interface with product rows,
-prices, currency and buy/sell controls.
-
-HOME:
-actual home/base/town interface.
-
-UNKNOWN:
-uncertain.
-
-
-Do not classify small icons as MENU,
-SHOP or INVENTORY.
+Important:
+- Do not output explanations before or after the STATE line.
+- Do not confuse small HUD icons with MENU, SHOP or INVENTORY.
+- Do not classify a safe field area as HOME only because "(안전)" is visible.
+- If both shop-like and inventory-like elements appear, choose SHOP.
 """
 
 
@@ -2011,6 +1999,8 @@ class VLMWorker:
 
         self.last_home_verify_time = 0.0
         self.cached_home_result = None
+        self.last_state_vlm_time = 0.0
+        self.cached_state_raw = None
         self.vlm_failure_streak = 0
 
         self.stabilizer = StateStabilizer()
@@ -2094,15 +2084,20 @@ class VLMWorker:
     ):
 
 
-        raw = detect_state(
-            frame
-        )
+        now = time.time()
 
-
-        print(
-            "[STATE RAW]",
-            raw
-        )
+        if (
+            self.cached_state_raw is not None
+            and now - self.last_state_vlm_time < STATE_VLM_INTERVAL
+        ):
+            raw = self.cached_state_raw
+            print("[STATE CACHE]", raw)
+        else:
+            raw = detect_state(
+                frame
+            )
+            self.cached_state_raw = raw
+            self.last_state_vlm_time = now
 
 
         if is_vlm_failure(raw):
@@ -2132,6 +2127,9 @@ class VLMWorker:
 
             print("[CONFIRMED] None")
 
+            self.cached_state_raw = None
+            self.last_state_vlm_time = 0.0
+
             return
 
 
@@ -2140,6 +2138,13 @@ class VLMWorker:
         state, confidence = parse_state(
             raw
         )
+
+        if (
+            state == "NORMAL"
+            and self.stabilizer.confirmed == "HOME"
+            and now - self.last_home_verify_time >= HOME_VERIFY_INTERVAL
+        ):
+            self.cached_home_result = None
 
 
         inventory_verified = False
