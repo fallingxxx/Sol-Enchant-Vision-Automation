@@ -84,7 +84,8 @@ VLM_LAST_END_TIME = 0.0
 VLM_MIN_GAP = 2.0
 HOME_VERIFY_INTERVAL = 3.0
 VLM_FAILURE_RESTART_THRESHOLD = 1
-VLM_FAILURE_COOLDOWN = 5.0
+VLM_FAILURE_COOLDOWN = 8.0
+VLM_RECOVERY_UNTIL = 0.0
 
 # OCR primary detection. OCR is intentionally much cheaper than VLM.
 OCR_ENABLED = True
@@ -386,7 +387,12 @@ def ollama_chat(
             VLM_RETRY_COUNT + 1
         ):
 
-            try:
+            if time.time() < VLM_RECOVERY_UNTIL:
+        remaining = VLM_RECOVERY_UNTIL - time.time()
+        print(f"[VLM RECOVERY GATE] waiting {remaining:.2f}s")
+        return {"message": {"content": ""}}
+
+    try:
 
                 r = requests.post(
                     OLLAMA_URL,
@@ -1411,6 +1417,7 @@ def detect_state(frame):
 
 
 def restart_vlm_after_repeated_failure():
+    global VLM_RECOVERY_UNTIL
 
     print("[VLM RECOVERY] restarting vision model")
 
