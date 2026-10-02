@@ -2207,12 +2207,7 @@ class VLMWorker:
             if now - self.last_ocr_time >= OCR_INTERVAL:
                 self.cached_ocr_results = ocr_screen(frame)
                 self.last_ocr_time = now
-                if self.cached_ocr_results:
-                    print(
-                        "[OCR]",
-                        " | ".join(x["text"] for x in self.cached_ocr_results)
-                    )
-
+                # Keep OCR output quiet unless it produces a real state hint.
             ocr_state, ocr_confidence, ocr_hits = classify_ocr_state(
                 self.cached_ocr_results
             )
