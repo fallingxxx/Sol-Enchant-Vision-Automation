@@ -2207,6 +2207,7 @@ class VLMWorker:
         self.last_state_vlm_time = 0.0
         self.cached_state_raw = None
         self.vlm_failure_streak = 0
+        self.inventory_title_override_count = 0
         self.last_ocr_time = 0.0
         self.cached_ocr_results = []
         self.ocr_available_logged = False
@@ -2333,9 +2334,16 @@ class VLMWorker:
                 if state == "SHOP":
                     inventory_candidate = verify_inventory(frame)
 
-                    if inventory_candidate:
-                        print("[STATE OVERRIDE] UI_TITLE SHOP -> INVENTORY")
-                        state = "INVENTORY"
+                    if inventory_candidate is None:
+                        # A failed VLM request is not evidence against the
+                        # current state. Never call the second verifier here.
+                        self.inventory_title_override_count = 0
+
+                        if self.stabilizer.confirmed == "INVENTORY":
+                            state = "INVENTORY"
+                        else:
+                            state = "SHOP"
+
                         confidence = 0.99
                         self.cached_state_raw = None
                         self.cached_state = state
@@ -2343,17 +2351,43 @@ class VLMWorker:
                         self.cached_state_time = now
                         self.last_confirmed_state = state
                         self.last_confirmed_confidence = confidence
-                        self.stabilizer.confirmed = state
-                        self.stabilizer.previous = state
-                        self.stabilizer.count = 0
+                        print("[UI TITLE RETAINED]", state)
+                        return state, confidence
+
+                    if inventory_candidate:
+                        # One YES is not enough to overturn an explicit SHOP
+                        # title. Require two consecutive positive inventory
+                        # checks. This prevents the known qwen2.5vl false YES
+                        # from making SHOP -> INVENTORY -> SHOP oscillations.
+                        self.inventory_title_override_count += 1
+
+                        if self.stabilizer.confirmed == "INVENTORY":
+                            state = "INVENTORY"
+                        elif self.inventory_title_override_count >= 2:
+                            print("[STATE OVERRIDE] UI_TITLE SHOP -> INVENTORY")
+                            state = "INVENTORY"
+                        else:
+                            state = "SHOP"
+
+                        confidence = 0.99
+                        self.cached_state_raw = None
+                        self.cached_state = state
+                        self.cached_state_confidence = confidence
+                        self.cached_state_time = now
+                        self.last_confirmed_state = state
+                        self.last_confirmed_confidence = confidence
+
+                        if state == "INVENTORY":
+                            self.stabilizer.confirmed = state
+                            self.stabilizer.previous = state
+                            self.stabilizer.count = 0
+
                         print("[UI TITLE CONFIRMED]", state)
                         return state, confidence
 
-                    # Do not let a transient/invalid INVENTORY verifier
-                    # response immediately flip an already confirmed
-                    # inventory screen back to SHOP. If SHOP is proposed
-                    # while INVENTORY is currently confirmed, require
-                    # positive SHOP verification before changing state.
+                    # A positive NO is real evidence that the screen is SHOP.
+                    self.inventory_title_override_count = 0
+
                     if self.stabilizer.confirmed == "INVENTORY":
                         shop_candidate = verify_shop(frame)
 
