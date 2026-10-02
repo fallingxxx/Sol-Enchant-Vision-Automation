@@ -1382,18 +1382,25 @@ or
 
 NO|0.95
 
-YES when the player is in the town/base/home area with the
-town environment, NPCs, buildings, or other clear town context.
+YES when the player is actually standing in the town/base/home area.
+Look for persistent town context such as town buildings, streets,
+NPCs, shops/buildings, or a clearly non-combat town environment.
+
+IMPORTANT:
+Do NOT require a special HOME button or a literal word "HOME".
+The game may show the town only as a visual scene.
 
 NO when:
 - an active battle/combat scene is visible
+- enemies/target combat UI are present
 - the player is in the hunting/field area
 - inventory/equipment is open
 - a merchant shop is open
 - a general menu is open
 
-A town screen must be distinguished from active combat.
-If there is any active combat indicator or battle scene, return NO.
+A town screen is NOT the same as a battle screen.
+If the screenshot visually shows the town and there is no active combat,
+return YES even if the normal state classifier said BATTLE.
 
 If uncertain, return NO.
 
@@ -2046,9 +2053,8 @@ class VLMWorker:
 
         if state == "BATTLE":
 
-            # Town can be mistaken for BATTLE by the broad state
-            # classifier. Verify the town separately before allowing
-            # BATTLE to become confirmed.
+            # The broad classifier often calls the town BATTLE.
+            # Verify HOME before allowing a new BATTLE confirmation.
 
             home_verified = verify_home(frame)
 
@@ -2060,6 +2066,20 @@ class VLMWorker:
 
                 state = "HOME"
                 confidence = 0.95
+
+        # Once a verified screen is no longer visually present,
+        # the normal stabilizer is allowed to replace the old
+        # confirmed SHOP/HOME state with the new state.
+        if (
+            self.stabilizer.confirmed in ("SHOP", "HOME")
+            and state not in ("SHOP", "HOME", "INVENTORY")
+            and not shop_verified
+            and not home_verified
+            and not inventory_verified
+        ):
+
+            self.stabilizer.previous = None
+            self.stabilizer.count = 0
 
 
         if state == "INVENTORY":
