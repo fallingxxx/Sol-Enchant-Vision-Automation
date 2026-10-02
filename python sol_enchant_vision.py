@@ -1739,6 +1739,124 @@ def run_auto_tap_test(capture, worker):
     detect_auto_state._history = []
     return False
 
+
+def run_auto_touch_test(capture, worker):
+    """
+    Real AUTO touch-duration diagnostic.
+
+    Safety:
+    - Requires AUTO to be visually classified as OFF first.
+    - Sends exactly one 150 ms touch press at the known AUTO coordinate.
+    - Does not retap automatically.
+    - Verifies whether the existing visual detector sees a transition.
+    """
+    print("=" * 60)
+    print("SOL ENCHANT - REAL AUTO TOUCH-PRESS TEST")
+    print("=" * 60)
+    print("[AUTO TOUCH TEST] IMPORTANT: AUTO must be OFF before this test")
+    print("[AUTO TOUCH TEST] waiting for video frame")
+
+    deadline = time.time() + AUTO_TAP_TEST_TIMEOUT
+    last_frame_id = -1
+    before_state = None
+    frame = None
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        state = detect_auto_state(frame)
+
+        if state is None:
+            continue
+
+        print(
+            f"[AUTO BEFORE] {state['state']} "
+            f"confidence={state['confidence']:.2f}"
+        )
+
+        if state["state"] == "ON":
+            print("[AUTO TOUCH TEST] ABORT -> AUTO is already ON")
+            print("[AUTO TOUCH TEST] Turn AUTO OFF manually, then rerun.")
+            detect_auto_state._history = []
+            return False
+
+        if state["state"] == "OFF":
+            before_state = state
+            break
+
+    if before_state is None:
+        print("[AUTO TOUCH TEST] ABORT -> could not safely confirm AUTO OFF")
+        detect_auto_state._history = []
+        return False
+
+    auto_target = find_auto_text_target(frame)
+    if auto_target is not None:
+        tap_vx, tap_vy, _ = auto_target
+    else:
+        tap_vx, tap_vy = AUTO_TAP_VISION_X, AUTO_TAP_VISION_Y
+        print(
+            f"[AUTO OCR] AUTO text not found -> fallback vision="
+            f"({tap_vx},{tap_vy})"
+        )
+
+    adb_x, adb_y = vision_to_adb(tap_vx, tap_vy)
+
+    print(
+        f"[AUTO TOUCH TEST] OFF confirmed -> "
+        f"PRESS vision=({tap_vx:.1f},{tap_vy:.1f})"
+    )
+    print(
+        f"[AUTO TOUCH TEST] ADB PRESS -> ({adb_x},{adb_y}) duration=150ms"
+    )
+
+    success = worker.executor.press(adb_x, adb_y, 150)
+
+    if not success:
+        print("[AUTO TOUCH TEST] FAILED -> ADB press command failed")
+        detect_auto_state._history = []
+        return False
+
+    print("[AUTO TOUCH TEST] ADB command succeeded")
+    print("[AUTO TOUCH TEST] verifying actual AUTO visual transition...")
+
+    detect_auto_state._history = []
+
+    verify_deadline = time.time() + AUTO_ON_VERIFY_TIMEOUT
+    last_frame_id = -1
+
+    while time.time() < verify_deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        state = detect_auto_state(frame)
+
+        if state is None:
+            continue
+
+        print(
+            f"[AUTO AFTER] {state['state']} "
+            f"confidence={state['confidence']:.2f}"
+        )
+
+        if state["state"] == "ON":
+            print("[AUTO TOUCH TEST] VERIFIED -> AUTO is actually ON")
+            detect_auto_state._history = []
+            return True
+
+    print("[AUTO TOUCH TEST] VERIFY FAILED -> AUTO did not become ON")
+    print("[AUTO TOUCH TEST] No second touch was attempted.")
+    detect_auto_state._history = []
+    return False
+
 def is_vlm_failure(raw):
     """Return True only when the VLM response is genuinely unusable."""
     if raw is None:
@@ -2365,6 +2483,38 @@ class ActionExecutor:
 
 
 
+
+
+    def press(self, x, y, duration_ms=150):
+        """
+        Send one deliberate touch press using ADB input swipe with identical
+        start/end coordinates. This is a diagnostic alternative to input tap
+        for games that are sensitive to very-short touch events.
+        """
+        if DRY_RUN:
+            print(f"[DRY RUN] press({x},{y},{duration_ms}ms)")
+            return False
+
+        result = adb_run(
+            [
+                "shell",
+                "input",
+                "swipe",
+                str(x),
+                str(y),
+                str(x),
+                str(y),
+                str(duration_ms),
+            ],
+            timeout=5,
+        )
+
+        if result is None or result.returncode != 0:
+            print("[PRESS ERROR]")
+            return False
+
+        print("[PRESS]", x, y, f"{duration_ms}ms")
+        return True
 
     def back(self):
 
@@ -3376,6 +3526,7 @@ def main():
     target_test = "--target-test" in sys.argv
     auto_test = "--auto-test" in sys.argv
     auto_tap_test = "--auto-tap-test" in sys.argv
+    auto_touch_test = "--auto-touch-test" in sys.argv
 
     global TARGET_DIAGNOSTIC_ONLY
     TARGET_DIAGNOSTIC_ONLY = target_test
@@ -3388,6 +3539,8 @@ def main():
         print("[MODE] target-test (NO TAP)")
     elif auto_tap_test:
         print("[MODE] auto-tap-test (REAL ADB TAP)")
+    elif auto_touch_test:
+        print("[MODE] auto-touch-test (REAL ADB 150ms PRESS)")
     elif auto_test:
         print("[MODE] auto-test")
     else:
@@ -3406,6 +3559,10 @@ def main():
     elif auto_tap_test:
         print(
             "SOL ENCHANT REAL AUTO TAP TEST"
+        )
+    elif auto_touch_test:
+        print(
+            "SOL ENCHANT REAL AUTO TOUCH-PRESS TEST"
         )
     else:
 
@@ -3456,6 +3613,10 @@ def main():
 
         if auto_tap_test:
             run_auto_tap_test(capture, worker)
+            return
+
+        if auto_touch_test:
+            run_auto_touch_test(capture, worker)
             return
 
         if auto_test:
