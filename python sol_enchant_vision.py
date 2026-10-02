@@ -1143,33 +1143,37 @@ def ocr_screen(frame):
 
 
 def detect_ui_title(frame):
-    """Detect upper-left UI title and save a diagnostic crop when unknown."""
+    """Detect the small Korean UI title in the extreme upper-left corner."""
     if not OCR_ENABLED or not OCR_AVAILABLE or frame is None:
         return None, 0.0
     try:
         h, w = frame.shape[:2]
-        roi = frame[0:min(h, 170), 0:min(w, 430)]
+
+        # Debug capture showed the title itself is only a small strip near
+        # the extreme upper-left; the previous 430x170 ROI diluted OCR.
+        roi = frame[0:min(h, 48), 0:min(w, 145)]
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        enlarged = cv2.resize(gray, None, fx=5.0, fy=5.0, interpolation=cv2.INTER_CUBIC)
-        variants = [
-            enlarged,
-            cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
-            cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1],
-        ]
+        gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+        enlarged = cv2.resize(gray, None, fx=8.0, fy=8.0, interpolation=cv2.INTER_CUBIC)
+
+        variants = [enlarged]
+        for threshold in (145, 175, 205):
+            variants.append(cv2.threshold(enlarged, threshold, 255, cv2.THRESH_BINARY)[1])
+            variants.append(cv2.threshold(enlarged, threshold, 255, cv2.THRESH_BINARY_INV)[1])
+
         for image in variants:
-            for psm in (6, 7, 11, 13):
-                text = pytesseract.image_to_string(image, lang=OCR_LANG, config=f"--psm {psm}")
+            for psm in (7, 8, 13):
+                text = pytesseract.image_to_string(
+                    image,
+                    lang=OCR_LANG,
+                    config=f"--psm {psm} -c preserve_interword_spaces=0",
+                )
                 compact = normalize_ocr_text(text)
                 if "인벤토리" in compact:
                     return "INVENTORY", 0.99
                 if "상점" in compact or "상인" in compact:
                     return "SHOP", 0.99
 
-        # Keep a single diagnostic crop for the first unknown title.
-        diagnostic_path = os.path.join(os.getcwd(), "ocr_title_debug.png")
-        if not os.path.exists(diagnostic_path):
-            cv2.imwrite(diagnostic_path, roi)
-            print("[OCR DEBUG] saved", diagnostic_path)
         return None, 0.0
     except Exception as e:
         print("[UI TITLE OCR ERROR]", repr(e))
