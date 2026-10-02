@@ -388,11 +388,11 @@ def ollama_chat(
         ):
 
             if time.time() < VLM_RECOVERY_UNTIL:
-        remaining = VLM_RECOVERY_UNTIL - time.time()
-        print(f"[VLM RECOVERY GATE] waiting {remaining:.2f}s")
-        return {"message": {"content": ""}}
+                remaining = VLM_RECOVERY_UNTIL - time.time()
+                print(f"[VLM RECOVERY GATE] waiting {remaining:.2f}s")
+                return {"message": {"content": ""}}
 
-    try:
+            try:
 
                 r = requests.post(
                     OLLAMA_URL,
