@@ -686,7 +686,7 @@ class VisionCapture:
 
             f"audio=false "
 
-            f"turn_screen_off=true "
+            f"turn_screen_off=false "
 
             f"control=false "
 
