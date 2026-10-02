@@ -136,6 +136,10 @@ ENABLE_INVENTORY_ACTION = True
 ENABLE_SHOP_ACTION = True
 ENABLE_HOME_ACTION = False
 
+# Safe target diagnostic mode: detect and print coordinates, never tap.
+TARGET_DIAGNOSTIC_ONLY = False
+TARGET_DIAGNOSTIC_INTERVAL = 3.0
+
 
 
 # ============================================================
@@ -2245,6 +2249,7 @@ class VLMWorker:
         self.last_ocr_time = 0.0
         self.cached_ocr_results = []
         self.ocr_available_logged = False
+        self.last_target_diagnostic_time = 0.0
 
         self.stabilizer = StateStabilizer()
 
@@ -2475,6 +2480,31 @@ class VLMWorker:
         inventory_verified = False
         shop_verified = False
         home_verified = False
+
+        # Safe live target test. Detection is allowed, tapping is not.
+        if (
+            TARGET_DIAGNOSTIC_ONLY
+            and state in ("NORMAL", "BATTLE")
+            and now - self.last_target_diagnostic_time >= TARGET_DIAGNOSTIC_INTERVAL
+        ):
+            self.last_target_diagnostic_time = now
+            print("[TARGET TEST] detecting target - NO TAP")
+            target = detect_target(
+                frame,
+                inventory=False,
+                state=state
+            )
+            if target is None:
+                print("[TARGET TEST] no target")
+            else:
+                print("[TARGET TEST] VISION -> ADB")
+                print(
+                    f"[TARGET TEST] vision=({target['vision_x']},{target['vision_y']}) "
+                    f"adb=({target['adb_x']},{target['adb_y']}) "
+                    f"confidence={target['confidence']:.2f} "
+                    f"reason={target['reason']}"
+                )
+            return
 
 
         if state == "HOME":
@@ -2973,11 +3003,17 @@ def main():
     # add or reorder arguments.
     single_vlm_test = "--single-vlm-test" in sys.argv
     single_ocr_test = "--ocr-test" in sys.argv
+    target_test = "--target-test" in sys.argv
+
+    global TARGET_DIAGNOSTIC_ONLY
+    TARGET_DIAGNOSTIC_ONLY = target_test
 
     if single_ocr_test:
         print("[MODE] ocr-test")
     elif single_vlm_test:
         print("[MODE] single-vlm-test")
+    elif target_test:
+        print("[MODE] target-test (NO TAP)")
     else:
         print("[MODE] realtime")
 
