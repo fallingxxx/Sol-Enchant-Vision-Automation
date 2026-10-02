@@ -2458,6 +2458,21 @@ class VLMWorker:
             self.vlm_failure_streak = 0
             state, confidence = parse_state(raw)
 
+            # Once SHOP has been explicitly confirmed, a generic VLM
+            # INVENTORY classification must not replace it. The inventory
+            # screen must provide its own explicit UI-title evidence before
+            # the confirmed SHOP state can change.
+            if (
+                state == "INVENTORY"
+                and self.stabilizer.confirmed == "SHOP"
+                and not any(
+                    hit[1] == "UI_TITLE" and hit[0] == "INVENTORY"
+                    for hit in ocr_hits
+                )
+            ):
+                print("[STATE RETAINED] SHOP -> ignoring generic INVENTORY VLM")
+                state = "SHOP"
+                confidence = 0.99
 
 
         if (
