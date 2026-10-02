@@ -1573,6 +1573,57 @@ def detect_auto_state(frame):
         "confidence": confidence,
     }
 
+def find_auto_text_target(frame):
+    """Locate the visible AUTO label with OCR and return a vision-space center."""
+    if not OCR_ENABLED or not OCR_AVAILABLE or frame is None:
+        return None
+
+    try:
+        x1, y1, x2, y2 = 560, 70, 720, 250
+        roi = frame[y1:y2, x1:x2]
+        if roi is None or roi.size == 0:
+            return None
+
+        scale = 4.0
+        enlarged = cv2.resize(
+            roi, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
+        )
+        data = pytesseract.image_to_data(
+            enlarged,
+            lang=OCR_LANG,
+            config="--psm 11",
+            output_type=pytesseract.Output.DICT,
+        )
+
+        for n, raw in enumerate(data.get("text", [])):
+            text_value = re.sub(r"[^A-Za-z]", "", str(raw).strip()).upper()
+            if text_value != "AUTO":
+                continue
+            try:
+                conf = float(data["conf"][n])
+            except Exception:
+                conf = 0.0
+            if conf < OCR_MIN_TEXT_CONFIDENCE:
+                continue
+
+            bx = float(data["left"][n])
+            by = float(data["top"][n])
+            bw = float(data["width"][n])
+            bh = float(data["height"][n])
+            vx = x1 + (bx + bw / 2.0) / scale
+            vy = y1 + (by + bh / 2.0) / scale
+            print(
+                f"[AUTO OCR] AUTO found confidence={conf:.0f} "
+                f"vision=({vx:.1f},{vy:.1f})"
+            )
+            return vx, vy, conf
+
+    except Exception as e:
+        print("[AUTO OCR ERROR]", repr(e))
+
+    return None
+
+
 def run_auto_tap_test(capture, worker):
     """
     Real AUTO-button verification.
@@ -1624,14 +1675,21 @@ def run_auto_tap_test(capture, worker):
         detect_auto_state._history = []
         return False
 
-    adb_x, adb_y = vision_to_adb(
-        AUTO_TAP_VISION_X,
-        AUTO_TAP_VISION_Y,
-    )
+    auto_target = find_auto_text_target(frame)
+    if auto_target is not None:
+        tap_vx, tap_vy, _ = auto_target
+    else:
+        tap_vx, tap_vy = AUTO_TAP_VISION_X, AUTO_TAP_VISION_Y
+        print(
+            f"[AUTO OCR] AUTO text not found -> fallback vision="
+            f"({tap_vx},{tap_vy})"
+        )
+
+    adb_x, adb_y = vision_to_adb(tap_vx, tap_vy)
 
     print(
         f"[AUTO TAP TEST] OFF confirmed -> "
-        f"REAL TAP vision=({AUTO_TAP_VISION_X},{AUTO_TAP_VISION_Y})"
+        f"REAL TAP vision=({tap_vx:.1f},{tap_vy:.1f})"
     )
     print(
         f"[AUTO TAP TEST] ADB TAP -> ({adb_x},{adb_y})"
