@@ -1857,6 +1857,162 @@ def run_auto_touch_test(capture, worker):
     detect_auto_state._history = []
     return False
 
+
+def run_auto_diagnostic(capture):
+    """
+    Passive AUTO-button geometry diagnostic.
+
+    This mode NEVER sends a touch event.
+    It captures one live frame, marks:
+      - the AUTO motion ROI
+      - the fixed AUTO tap point
+      - the corresponding ADB coordinate
+      - the OCR-detected AUTO text target, when available
+    and writes a full-frame + AUTO crop image for inspection.
+    """
+    print("=" * 60)
+    print("SOL ENCHANT - PASSIVE AUTO GEOMETRY DIAGNOSTIC")
+    print("=" * 60)
+    print("[AUTO DIAGNOSTIC] NO TOUCH WILL BE SENT")
+
+    deadline = time.time() + AUTO_TAP_TEST_TIMEOUT
+    last_frame_id = -1
+    frame = None
+    frame_id = 0
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        break
+
+    if frame is None:
+        print("[AUTO DIAGNOSTIC] ERROR -> no video frame received")
+        return False
+
+    print(
+        "[AUTO DIAGNOSTIC] frame:",
+        frame.shape,
+        "frame_id=",
+        frame_id,
+    )
+
+    output = frame.copy()
+
+    # Draw the exact CV motion ROI.
+    cv2.rectangle(
+        output,
+        (AUTO_ROI_X1, AUTO_ROI_Y1),
+        (AUTO_ROI_X2, AUTO_ROI_Y2),
+        (0, 255, 255),
+        2,
+    )
+
+    # Draw the fixed fallback point.
+    fixed_x = int(round(AUTO_TAP_VISION_X))
+    fixed_y = int(round(AUTO_TAP_VISION_Y))
+    cv2.drawMarker(
+        output,
+        (fixed_x, fixed_y),
+        (0, 255, 0),
+        cv2.MARKER_CROSS,
+        24,
+        3,
+    )
+
+    fixed_adb_x, fixed_adb_y = vision_to_adb(
+        AUTO_TAP_VISION_X,
+        AUTO_TAP_VISION_Y,
+    )
+
+    cv2.putText(
+        output,
+        f"FIXED VISION ({fixed_x},{fixed_y}) -> ADB ({fixed_adb_x},{fixed_adb_y})",
+        (max(5, AUTO_ROI_X1 - 5), max(25, AUTO_ROI_Y1 - 10)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (0, 255, 0),
+        1,
+        cv2.LINE_AA,
+    )
+
+    # Try OCR independently, but never use its result to touch anything.
+    auto_target = find_auto_text_target(frame)
+
+    if auto_target is not None:
+        tap_vx, tap_vy, conf = auto_target
+        ocr_adb_x, ocr_adb_y = vision_to_adb(tap_vx, tap_vy)
+
+        ox = int(round(tap_vx))
+        oy = int(round(tap_vy))
+
+        cv2.drawMarker(
+            output,
+            (ox, oy),
+            (255, 0, 255),
+            cv2.MARKER_TILTED_CROSS,
+            24,
+            3,
+        )
+
+        cv2.putText(
+            output,
+            f"OCR AUTO ({tap_vx:.1f},{tap_vy:.1f}) conf={conf:.0f} -> ADB ({ocr_adb_x},{ocr_adb_y})",
+            (max(5, AUTO_ROI_X1 - 5), min(output.shape[0] - 8, AUTO_ROI_Y2 + 24)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (255, 0, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+        print(
+            f"[AUTO DIAGNOSTIC] OCR target vision=({tap_vx:.1f},{tap_vy:.1f}) "
+            f"ADB=({ocr_adb_x},{ocr_adb_y}) confidence={conf:.0f}"
+        )
+    else:
+        print("[AUTO DIAGNOSTIC] OCR target: NOT FOUND")
+        cv2.putText(
+            output,
+            "OCR AUTO: NOT FOUND",
+            (max(5, AUTO_ROI_X1 - 5), min(output.shape[0] - 8, AUTO_ROI_Y2 + 24)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (0, 0, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+    full_path = "auto_debug.jpg"
+    crop_path = "auto_debug_crop.jpg"
+
+    cv2.imwrite(full_path, output)
+
+    crop_x1 = max(0, AUTO_ROI_X1 - 70)
+    crop_y1 = max(0, AUTO_ROI_Y1 - 70)
+    crop_x2 = min(output.shape[1], AUTO_ROI_X2 + 20)
+    crop_y2 = min(output.shape[0], AUTO_ROI_Y2 + 50)
+
+    cv2.imwrite(
+        crop_path,
+        output[crop_y1:crop_y2, crop_x1:crop_x2],
+    )
+
+    print(f"[AUTO DIAGNOSTIC] saved -> {full_path}")
+    print(f"[AUTO DIAGNOSTIC] saved -> {crop_path}")
+    print(
+        f"[AUTO DIAGNOSTIC] fixed vision=({fixed_x},{fixed_y}) "
+        f"ADB=({fixed_adb_x},{fixed_adb_y})"
+    )
+    print("[AUTO DIAGNOSTIC] COMPLETE -> no touch was attempted.")
+
+    return True
+
+
 def is_vlm_failure(raw):
     """Return True only when the VLM response is genuinely unusable."""
     if raw is None:
@@ -3527,6 +3683,7 @@ def main():
     auto_test = "--auto-test" in sys.argv
     auto_tap_test = "--auto-tap-test" in sys.argv
     auto_touch_test = "--auto-touch-test" in sys.argv
+    auto_diagnostic = "--auto-diagnostic" in sys.argv
 
     global TARGET_DIAGNOSTIC_ONLY
     TARGET_DIAGNOSTIC_ONLY = target_test
@@ -3541,6 +3698,8 @@ def main():
         print("[MODE] auto-tap-test (REAL ADB TAP)")
     elif auto_touch_test:
         print("[MODE] auto-touch-test (REAL ADB 150ms PRESS)")
+    elif auto_diagnostic:
+        print("[MODE] auto-diagnostic (NO TOUCH)")
     elif auto_test:
         print("[MODE] auto-test")
     else:
@@ -3563,6 +3722,10 @@ def main():
     elif auto_touch_test:
         print(
             "SOL ENCHANT REAL AUTO TOUCH-PRESS TEST"
+        )
+    elif auto_diagnostic:
+        print(
+            "SOL ENCHANT PASSIVE AUTO GEOMETRY DIAGNOSTIC"
         )
     else:
 
@@ -3617,6 +3780,10 @@ def main():
 
         if auto_touch_test:
             run_auto_touch_test(capture, worker)
+            return
+
+        if auto_diagnostic:
+            run_auto_diagnostic(capture)
             return
 
         if auto_test:
