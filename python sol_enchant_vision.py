@@ -1432,6 +1432,9 @@ AUTO_MOTION_THRESHOLD = 3.0
 AUTO_MOTION_MIN_ACTIVE_PIXELS = 0.02
 AUTO_MOTION_HISTORY_REQUIRED = 3
 AUTO_OFF_CONFIRM_REQUIRED = 2
+AUTO_ON_CONFIRM_REQUIRED = 2
+AUTO_ON_VERIFY_TIMEOUT = 10.0
+AUTO_CHECK_INTERVAL = 1.5
 
 def measure_auto_motion(frame):
     """
@@ -2348,6 +2351,9 @@ class VLMWorker:
         self.last_target_diagnostic_time = 0.0
         self.last_auto_action_time = 0.0
         self.auto_off_confirm_count = 0
+        self.auto_on_confirm_count = 0
+        self.auto_on_verify_pending = False
+        self.auto_on_verify_deadline = 0.0
 
         self.stabilizer = StateStabilizer()
 
@@ -2593,36 +2599,86 @@ class VLMWorker:
             auto_state = detect_auto_state(frame)
 
             if auto_state is None:
-                self.auto_off_confirm_count = 0
                 print("[AUTO ACTION] no safe state -> NO TAP")
 
             elif auto_state["state"] == "ON":
                 self.auto_off_confirm_count = 0
-                print(
-                    f"[AUTO STATE] ON confidence={auto_state['confidence']:.2f}"
-                )
-                print("[AUTO ACTION] already ON -> NO TAP")
+
+                if self.auto_on_verify_pending:
+                    self.auto_on_confirm_count += 1
+                    print(
+                        f"[AUTO VERIFY] ON detected after tap "
+                        f"confirm={self.auto_on_confirm_count}/{AUTO_ON_CONFIRM_REQUIRED}"
+                    )
+
+                    if self.auto_on_confirm_count >= AUTO_ON_CONFIRM_REQUIRED:
+                        self.auto_on_verify_pending = False
+                        self.auto_on_confirm_count = 0
+                        print("[AUTO VERIFY] TAP SUCCESS -> AUTO is ON")
+                    else:
+                        print("[AUTO VERIFY] waiting for second ON confirmation")
+                else:
+                    self.auto_on_confirm_count = 0
+                    print(
+                        f"[AUTO STATE] ON confidence={auto_state['confidence']:.2f}"
+                    )
+                    print("[AUTO ACTION] already ON -> NO TAP")
 
             elif auto_state["state"] == "OFF":
-                self.auto_off_confirm_count += 1
-                print(
-                    f"[AUTO STATE] OFF confidence={auto_state['confidence']:.2f} "
-                    f"confirm={self.auto_off_confirm_count}/{AUTO_OFF_CONFIRM_REQUIRED}"
-                )
+                self.auto_on_confirm_count = 0
 
-                if self.auto_off_confirm_count >= AUTO_OFF_CONFIRM_REQUIRED:
+                if self.auto_on_verify_pending:
+                    remaining = max(
+                        0.0,
+                        self.auto_on_verify_deadline - now
+                    )
+
                     print(
-                        f"[AUTO ACTION] OFF confirmed -> tap "
-                        f"vision=({auto_state['vision_x']},{auto_state['vision_y']}) "
-                        f"adb=({auto_state['adb_x']},{auto_state['adb_y']})"
+                        f"[AUTO VERIFY] still OFF after tap "
+                        f"remaining={remaining:.1f}s -> NO RETAP"
                     )
-                    self.executor.tap(
-                        auto_state["adb_x"],
-                        auto_state["adb_y"]
-                    )
-                    self.auto_off_confirm_count = 0
+
+                    if now >= self.auto_on_verify_deadline:
+                        self.auto_on_verify_pending = False
+                        self.auto_off_confirm_count = 0
+                        print("[AUTO VERIFY] TIMEOUT -> tap was not confirmed")
                 else:
-                    print("[AUTO ACTION] waiting for second OFF confirmation")
+                    self.auto_off_confirm_count += 1
+                    print(
+                        f"[AUTO STATE] OFF confidence={auto_state['confidence']:.2f} "
+                        f"confirm={self.auto_off_confirm_count}/{AUTO_OFF_CONFIRM_REQUIRED}"
+                    )
+
+                    if self.auto_off_confirm_count >= AUTO_OFF_CONFIRM_REQUIRED:
+                        print(
+                            f"[AUTO ACTION] OFF confirmed -> tap "
+                            f"vision=({auto_state['vision_x']},{auto_state['vision_y']}) "
+                            f"adb=({auto_state['adb_x']},{auto_state['adb_y']})"
+                        )
+
+                        self.executor.tap(
+                            auto_state["adb_x"],
+                            auto_state["adb_y"]
+                        )
+
+                        # The current frame history describes the OFF state.
+                        # Discard it so the next measurements verify the
+                        # actual post-tap transition rather than stale frames.
+                        detect_auto_state._history = []
+
+                        self.auto_off_confirm_count = 0
+                        self.auto_on_confirm_count = 0
+                        self.auto_on_verify_pending = True
+                        self.auto_on_verify_deadline = (
+                            now + AUTO_ON_VERIFY_TIMEOUT
+                        )
+
+                        print(
+                            f"[AUTO VERIFY] waiting for ON "
+                            f"timeout={AUTO_ON_VERIFY_TIMEOUT:.1f}s"
+                        )
+                    else:
+                        print("[AUTO ACTION] waiting for second OFF confirmation")
 
 
         # Safe live target test. Detection is allowed, tapping is not.
