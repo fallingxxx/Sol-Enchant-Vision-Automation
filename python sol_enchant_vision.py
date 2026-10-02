@@ -1189,10 +1189,15 @@ Priority rules:
    town facilities or a clearly recognizable town/base context should be visible.
 4. "(안전)" means only a PK-disabled safe area. It is NOT proof of HOME.
 5. BATTLE requires actual active combat evidence such as enemy combat UI,
-   target/HP bars, damage numbers or an active attack scene.
+   target/HP bars, damage numbers, attack effects or an active attack scene.
+   A safe-area dungeon, hunting dungeon, field, or other PvE area where the
+   character is merely present or moving is NOT BATTLE. If no active combat
+   evidence is visible, prefer NORMAL.
 6. MENU is a large general menu panel that is not inventory or shop.
 7. NORMAL is ordinary field/gameplay without active combat.
 8. UNKNOWN if the screenshot is genuinely ambiguous.
+9. Do not infer BATTLE merely from a dungeon, monster-hunting location,
+   "(안전)", minimap context, or the presence of game HUD elements.
 
 Important:
 - Do not output explanations before or after the STATE line.
