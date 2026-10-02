@@ -60,6 +60,14 @@ VLM_RETRY_COUNT = 1
 
 VLM_RETRY_DELAY = 0.5
 
+# VLM request serialization / cooldown.
+# The RTX 3050 4GB environment can become unstable when multiple
+# image requests are issued back-to-back. Every VLM request is
+# serialized and a minimum gap is enforced between requests.
+VLM_REQUEST_LOCK = threading.Lock()
+VLM_LAST_END_TIME = 0.0
+VLM_MIN_GAP = 1.5
+
 
 # state
 
@@ -332,50 +340,71 @@ def ollama_chat(
     }
 
 
-    for attempt in range(
-        VLM_RETRY_COUNT + 1
-    ):
+    global VLM_LAST_END_TIME
 
-        try:
+    # Only one image request may be active at a time.
+    # Also leave a small cooldown after the previous request.
+    with VLM_REQUEST_LOCK:
 
-            r = requests.post(
-                OLLAMA_URL,
-                json=payload,
-                timeout=timeout,
+        now = time.time()
+        wait = (
+            VLM_MIN_GAP
+            - (now - VLM_LAST_END_TIME)
+        )
+
+        if wait > 0:
+            print(
+                f"[VLM COOLDOWN] waiting {wait:.2f}s"
             )
+            time.sleep(wait)
+
+        for attempt in range(
+            VLM_RETRY_COUNT + 1
+        ):
+
+            try:
+
+                r = requests.post(
+                    OLLAMA_URL,
+                    json=payload,
+                    timeout=timeout,
+                )
 
 
 
-            if not r.ok:
+                if not r.ok:
+
+                    print(
+                        "[OLLAMA HTTP]",
+                        r.status_code,
+                        r.text[:1000]
+                    )
+
+                    r.raise_for_status()
+
+                VLM_LAST_END_TIME = time.time()
+
+                return r.json()
+
+
+            except Exception as e:
 
                 print(
-                    "[OLLAMA HTTP]",
-                    r.status_code,
-                    r.text[:1000]
+                    "[OLLAMA ERROR]",
+                    repr(e)
                 )
 
-                r.raise_for_status()
+                if attempt < VLM_RETRY_COUNT:
 
-            return r.json()
+                    time.sleep(
+                        VLM_RETRY_DELAY
+                    )
 
+        VLM_LAST_END_TIME = time.time()
 
-        except Exception as e:
-
-            print(
-                "[OLLAMA ERROR]",
-                repr(e)
-            )
-
-            if attempt < VLM_RETRY_COUNT:
-
-                time.sleep(
-                    VLM_RETRY_DELAY
-                )
-
-
-    raise RuntimeError(
-        "Ollama failed"
-    )
+        raise RuntimeError(
+            "Ollama failed"
+        )
 
 
 
