@@ -1989,6 +1989,120 @@ def run_auto_force_tap_test(capture, worker):
     return True
 
 
+def run_auto_button_grid_diagnostic(capture):
+    """
+    No-touch AUTO button geometry diagnostic.
+
+    Captures one live frame and creates a dense coordinate grid over the
+    current AUTO ROI. Every grid point is labelled with both Vision and
+    ADB coordinates. No input event is sent.
+    """
+    print("=" * 60)
+    print("SOL ENCHANT - AUTO BUTTON GRID DIAGNOSTIC")
+    print("=" * 60)
+    print("[AUTO GRID] NO TOUCH WILL BE SENT")
+
+    deadline = time.time() + AUTO_TAP_TEST_TIMEOUT
+    last_frame_id = -1
+    frame = None
+    frame_id = 0
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        break
+
+    if frame is None:
+        print("[AUTO GRID] ERROR -> no video frame received")
+        return False
+
+    output = frame.copy()
+
+    # Use the full current AUTO ROI, but inset slightly so labels/markers
+    # remain inside the actual screen.
+    x1 = max(0, AUTO_ROI_X1)
+    y1 = max(0, AUTO_ROI_Y1)
+    x2 = min(output.shape[1] - 1, AUTO_ROI_X2)
+    y2 = min(output.shape[0] - 1, AUTO_ROI_Y2)
+
+    cv2.rectangle(output, (x1, y1), (x2, y2), (0, 255, 255), 2)
+
+    # 5 columns x 5 rows gives enough precision without making the image
+    # unreadable. Include the current fixed candidate as a separate marker.
+    xs = [x1 + round((x2 - x1) * i / 4) for i in range(5)]
+    ys = [y1 + round((y2 - y1) * i / 4) for i in range(5)]
+
+    print(f"[AUTO GRID] frame={frame.shape} frame_id={frame_id}")
+    print(f"[AUTO GRID] ROI vision=({x1},{y1})-({x2},{y2})")
+    print("[AUTO GRID] candidate coordinates:")
+
+    for row, vy in enumerate(ys):
+        row_values = []
+        for col, vx in enumerate(xs):
+            ax, ay = vision_to_adb(vx, vy)
+            row_values.append(f"G{row+1}{col+1}=V({vx},{vy})/A({ax},{ay})")
+
+            cv2.drawMarker(
+                output,
+                (vx, vy),
+                (255, 255, 255),
+                cv2.MARKER_CROSS,
+                12,
+                1,
+            )
+
+            label_y = min(output.shape[0] - 4, vy + 16)
+            cv2.putText(
+                output,
+                f"G{row+1}{col+1} {ax},{ay}",
+                (max(2, vx - 28), max(12, label_y)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.30,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        print("  " + " | ".join(row_values))
+
+    # Highlight the current candidate in red so it is obvious which point
+    # was just tested by --auto-force-tap-test.
+    fx = int(round(AUTO_TAP_VISION_X))
+    fy = int(round(AUTO_TAP_VISION_Y))
+    fax, fay = vision_to_adb(AUTO_TAP_VISION_X, AUTO_TAP_VISION_Y)
+
+    cv2.drawMarker(
+        output,
+        (fx, fy),
+        (0, 0, 255),
+        cv2.MARKER_TILTED_CROSS,
+        28,
+        3,
+    )
+    cv2.putText(
+        output,
+        f"CURRENT ({fx},{fy}) -> ADB ({fax},{fay})",
+        (max(5, x1), max(18, y1 - 8)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (0, 0, 255),
+        2,
+        cv2.LINE_AA,
+    )
+
+    path = "auto_button_grid.jpg"
+    cv2.imwrite(path, output)
+
+    print("[AUTO GRID] saved ->", path)
+    print("[AUTO GRID] NO TOUCH WAS SENT")
+    return True
+
+
 def run_auto_diagnostic(capture):
     """
     Passive AUTO-button geometry diagnostic.
@@ -3815,6 +3929,7 @@ def main():
     auto_tap_test = "--auto-tap-test" in sys.argv
     auto_touch_test = "--auto-touch-test" in sys.argv
     auto_force_tap_test = "--auto-force-tap-test" in sys.argv
+    auto_grid_diagnostic = "--auto-grid-diagnostic" in sys.argv
     auto_diagnostic = "--auto-diagnostic" in sys.argv
 
     global TARGET_DIAGNOSTIC_ONLY
@@ -3832,6 +3947,8 @@ def main():
         print("[MODE] auto-touch-test (REAL ADB 150ms PRESS)")
     elif auto_force_tap_test:
         print("[MODE] auto-force-tap-test (ONE REAL ADB TAP)")
+    elif auto_grid_diagnostic:
+        print("[MODE] auto-grid-diagnostic (NO TOUCH)")
     elif auto_diagnostic:
         print("[MODE] auto-diagnostic (NO TOUCH)")
     elif auto_test:
@@ -3860,6 +3977,10 @@ def main():
     elif auto_force_tap_test:
         print(
             "SOL ENCHANT ONE-SHOT REAL AUTO TAP TEST"
+        )
+    elif auto_grid_diagnostic:
+        print(
+            "SOL ENCHANT AUTO BUTTON GRID DIAGNOSTIC"
         )
     elif auto_diagnostic:
         print(
@@ -3922,6 +4043,10 @@ def main():
 
         if auto_force_tap_test:
             run_auto_force_tap_test(capture, worker)
+            return
+
+        if auto_grid_diagnostic:
+            run_auto_button_grid_diagnostic(capture)
             return
 
         if auto_diagnostic:
