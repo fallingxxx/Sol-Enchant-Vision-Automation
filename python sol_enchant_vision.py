@@ -2095,12 +2095,25 @@ def run_auto_button_grid_diagnostic(capture):
         cv2.LINE_AA,
     )
 
-    path = "auto_button_grid.jpg"
-    cv2.imwrite(path, output)
+    # Always save beside this Python script, not in the caller's
+    # current working directory. This makes the diagnostic artifact
+    # location deterministic.
+    output_dir = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(output_dir, "auto_button_grid.jpg")
 
+    try:
+        saved = cv2.imwrite(path, output)
+    except Exception as e:
+        print("[AUTO GRID] IMAGE SAVE ERROR:", repr(e))
+        return False
+
+    print("[AUTO GRID] save_result =", saved)
     print("[AUTO GRID] saved ->", path)
+    print("[AUTO GRID] file_exists ->", os.path.isfile(path))
+    if os.path.isfile(path):
+        print("[AUTO GRID] file_size ->", os.path.getsize(path), "bytes")
     print("[AUTO GRID] NO TOUCH WAS SENT")
-    return True
+    return bool(saved)
 
 
 def run_auto_diagnostic(capture):
