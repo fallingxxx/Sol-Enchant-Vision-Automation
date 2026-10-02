@@ -1156,30 +1156,64 @@ def detect_ui_title(frame):
     try:
         h, w = frame.shape[:2]
 
-        # Debug capture showed the title itself is only a small strip near
-        # the extreme upper-left; the previous 430x170 ROI diluted OCR.
-        roi = frame[0:min(h, 48), 0:min(w, 145)]
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
-        enlarged = cv2.resize(gray, None, fx=8.0, fy=8.0, interpolation=cv2.INTER_CUBIC)
+        # The title can shift slightly depending on the current game UI scale.
+        # Try several small upper-left ROIs instead of relying on a single crop.
+        rois = [
+            frame[0:min(h, 48), 0:min(w, 145)],
+            frame[0:min(h, 72), 0:min(w, 220)],
+            frame[0:min(h, 96), 0:min(w, 300)],
+        ]
 
-        variants = [enlarged]
-        for threshold in (145, 175, 205):
-            variants.append(cv2.threshold(enlarged, threshold, 255, cv2.THRESH_BINARY)[1])
-            variants.append(cv2.threshold(enlarged, threshold, 255, cv2.THRESH_BINARY_INV)[1])
+        for roi in rois:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            gray = cv2.createCLAHE(
+                clipLimit=2.0,
+                tileGridSize=(8, 8),
+            ).apply(gray)
 
-        for image in variants:
-            for psm in (7, 8, 13):
-                text = pytesseract.image_to_string(
-                    image,
-                    lang=OCR_LANG,
-                    config=f"--psm {psm} -c preserve_interword_spaces=0",
+            enlarged = cv2.resize(
+                gray,
+                None,
+                fx=6.0,
+                fy=6.0,
+                interpolation=cv2.INTER_CUBIC,
+            )
+
+            variants = [enlarged]
+            for threshold in (135, 155, 175, 195, 215):
+                variants.append(
+                    cv2.threshold(
+                        enlarged,
+                        threshold,
+                        255,
+                        cv2.THRESH_BINARY,
+                    )[1]
                 )
-                compact = normalize_ocr_text(text)
-                if "인벤토리" in compact:
-                    return "INVENTORY", 0.99
-                if "상점" in compact or "상인" in compact:
-                    return "SHOP", 0.99
+                variants.append(
+                    cv2.threshold(
+                        enlarged,
+                        threshold,
+                        255,
+                        cv2.THRESH_BINARY_INV,
+                    )[1]
+                )
+
+            for image in variants:
+                for psm in (7, 8, 13):
+                    text = pytesseract.image_to_string(
+                        image,
+                        lang=OCR_LANG,
+                        config="--psm "
+                        + str(psm)
+                        + " -c preserve_interword_spaces=0",
+                    )
+                    compact = normalize_ocr_text(text)
+
+                    if "인벤토리" in compact:
+                        return "INVENTORY", 0.99
+
+                    if "상점" in compact or "상인" in compact:
+                        return "SHOP", 0.99
 
         return None, 0.0
     except Exception as e:
