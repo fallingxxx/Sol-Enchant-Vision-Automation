@@ -2483,10 +2483,7 @@ class VLMWorker:
 
             # A full-screen VLM can mistake the player's inventory for a
             # merchant shop because both screens contain item grids/rows.
-            # When SHOP is proposed, explicitly re-check the inventory
-            # candidate before accepting SHOP. This is deliberately limited
-            # to the ambiguous SHOP path so it does not add another VLM call
-            # to ordinary gameplay frames.
+            # Verify the inventory candidate before accepting SHOP.
             inventory_candidate = verify_inventory(frame)
 
             if inventory_candidate:
@@ -2494,8 +2491,10 @@ class VLMWorker:
                 print("[STATE OVERRIDE] SHOP -> INVENTORY")
                 state = "INVENTORY"
                 confidence = 0.95
-            else:
-                confirmed = "SHOP"
+
+        if state == "SHOP":
+
+            confirmed = "SHOP"
 
             changed = (
                 self.stabilizer.confirmed
