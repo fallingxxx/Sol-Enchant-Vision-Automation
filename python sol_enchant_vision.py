@@ -140,6 +140,7 @@ ENABLE_HOME_ACTION = False
 ENABLE_AUTO_ACTION = True
 AUTO_MIN_CONFIDENCE = 0.85
 AUTO_CHECK_INTERVAL = 5.0
+AUTO_OFF_CONFIRM_REQUIRED = 2
 
 # Safe target diagnostic mode: detect and print coordinates, never tap.
 TARGET_DIAGNOSTIC_ONLY = False
@@ -1403,553 +1404,98 @@ NONE
 """
 
 
-AUTO_TARGET_PROMPT = """
-The Sol Enchant hunting screen is visible.
+AUTO_STATE_PROMPT = """
+Determine the state of the game's AUTO / 자동사냥 control.
 
-Find the game's AUTO / 자동사냥 button.
-It is a UI control, not a monster and not an item.
+Return exactly ONE line.
 
-Return exactly:
-TARGET|x|y|confidence|reason
+If AUTO is visibly active:
+ON|confidence
 
-The target must be the visible AUTO/자동사냥 control itself.
-Do not choose minimap, potion, inventory, chat, skill buttons,
-monster/enemy, character, or decorative icons.
+If AUTO is visibly inactive and the AUTO button itself is clearly visible:
+OFF|x|y|confidence|reason
 
-Only return TARGET when the AUTO control is clearly visible.
-Otherwise return:
-NONE
+If the state cannot be determined safely:
+UNKNOWN
+
+Rules:
+- Do not guess.
+- ON means the game is already in automatic hunting mode.
+- OFF means AUTO must be tapped to start automatic hunting.
+- x,y must be the center of the AUTO button in the 720x324 image.
+- Do not use minimap, potion, inventory, chat, skill buttons, monsters, character, or decorative icons.
+- Confidence must be 0 to 1.
 """
 
+AUTO_STATE_RE = re.compile(
+    r"^ON\\s*[|:]\\s*(100(?:\\.\\d+)?|[0-9]{1,2}(?:\\.\\d+)?)\\s*$",
+    re.I,
+)
+
+AUTO_OFF_RE = re.compile(
+    r"^OFF\\s*[|:]\\s*(\\d+)\\s*[|:]\\s*(\\d+)\\s*[|:]\\s*"
+    r"(100(?:\\.\\d+)?|[0-9]{1,2}(?:\\.\\d+)?)\\s*[|:]\\s*(.*)$",
+    re.I,
+)
 
 
-HOME_TARGET_PROMPT = """
-The HOME screen is confirmed.
-
-Find one visible control that returns from the home/base/town
-area toward the hunting or field gameplay area.
-
-Only choose a clearly labeled navigation control.
-Do NOT choose shops, NPCs, items, decorations, or unrelated icons.
-
-Return exactly:
-
-TARGET|x|y|confidence|reason
-
-If no safe hunting/field navigation control is visible:
-
-NONE
-"""
-
-
-
-# ============================================================
-# STATE
-# ============================================================
-
-
-def detect_state(frame):
-
+def detect_auto_state(frame):
     try:
-
-        result = ollama_chat(
-            STATE_PROMPT,
-            image=frame
+        raw = ollama_text_with_image(
+            AUTO_STATE_PROMPT,
+            frame,
         )
-
-
-        return (
-            result
-            .get("message", {})
-            .get("content","")
-            .strip()
-        )
-
-
-    except Exception as e:
-
-        print(
-            "[STATE ERROR]",
-            e
-        )
-
-        return "UNKNOWN|0"
-
-
-
-
-
-def restart_vlm_after_repeated_failure():
-    global VLM_RECOVERY_UNTIL
-
-    print("[VLM RECOVERY] restarting vision model")
-
-    try:
-        subprocess.run(
-            ["ollama", "stop", MODEL],
-            timeout=20,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        time.sleep(1.0)
-        print("[VLM RECOVERY] model stopped; next request will reload it")
-    except Exception as e:
-        print("[VLM RECOVERY ERROR]", e)
-
-
-def is_vlm_failure(raw):
-
-    if not raw:
-        return True
-
-    text = str(raw).strip()
-
-    compact = re.sub(r"\\s+", "", text)
-
-    if len(compact) >= 8 and set(compact) == {"@"}:
-        return True
-
-    if "token repeat limit" in text.lower():
-        return True
-
-    return False
-
-
-def parse_state(raw):
-    if not raw:
-        return "UNKNOWN", 0.0
-
-    text = raw.upper()
-
-    detected = None
-
-    for state_name in VALID_STATES:
-        if state_name in text:
-            detected = state_name
-            break
-
-    if detected is None:
-        return "UNKNOWN", 0.0
-
-    confidence = 0.8
-
-    nums = re.findall(r"\d+(?:\.\d+)?", text)
-
-    if nums:
-        value = float(nums[-1])
-
-        if value > 1:
-            confidence = value / 100.0
-        else:
-            confidence = value
-
-    return detected, confidence
-
-
-
-
-
-# ============================================================
-# INVENTORY VERIFY
-# ============================================================
-
-
-def verify_inventory(frame):
-
-
-    try:
-
-
-        # Build a visual probe that preserves the full screen while
-        # enlarging the tiny upper-left UI-title region. This addresses the
-        # exact failure mode where the full VLM sees an item grid and calls
-        # it SHOP, while the actual inventory title is too small to notice.
-        probe = frame
-        try:
-            h, w = frame.shape[:2]
-            title = frame[0:min(h, 64), 0:min(w, 180)]
-            title = cv2.resize(
-                title,
-                None,
-                fx=4.0,
-                fy=4.0,
-                interpolation=cv2.INTER_CUBIC,
-            )
-            canvas_h = max(h, title.shape[0])
-            canvas_w = w + title.shape[1] + 8
-            probe = cv2.copyMakeBorder(
-                frame,
-                0,
-                canvas_h - h,
-                0,
-                title.shape[1] + 8,
-                cv2.BORDER_CONSTANT,
-                value=(0, 0, 0),
-            )
-            probe[0:title.shape[0], w + 8:w + 8 + title.shape[1]] = title
-        except Exception as e:
-            print("[INV PROBE ERROR]", e)
-
-        result = ollama_chat(
-            INVENTORY_PROMPT,
-            image=probe
-        )
-
-
-        text = (
-            result
-            .get("message", {})
-            .get("content","")
-        )
-
-
-        print(
-            "[INV RAW]",
-            text
-        )
-
-        if is_vlm_failure(text):
-            print("[INV FAILURE] invalid/repeated model output")
-            restart_vlm_after_repeated_failure()
-            return None
-
-
-
-        m = YES_NO_RE.search(
-            text
-        )
-
-
-        if not m:
-
-            return None
-
-
-
-        yes = (
-            m.group(1)
-            .upper()
-            ==
-            "YES"
-        )
-
-
-        conf = float(
-            m.group(2)
-        )
-
-
-        if conf > 1:
-
-            conf /= 100
-
-
-
-        accepted = (
-
-            yes
-
-            and
-
-            conf >= INVENTORY_MIN_CONFIDENCE
-
-        )
-
-
-        print(
-            "[INV]",
-            accepted,
-            conf
-        )
-
-
-        return accepted
-
-
-
-    except Exception as e:
-
-
-        print(
-            "[INV ERROR]",
-            e
-        )
-
-
-        return False
-
-
-
-
-# ============================================================
-# HOME VERIFY
-# ============================================================
-
-
-HOME_VERIFY_PROMPT = """
-Is the player currently in the actual town/home/base area?
-
-Return ONLY one line.
-
-Format:
-
-YES|0.95
-
-or
-
-NO|0.95
-
-YES only when the overall screenshot visually matches an actual
-town/home/base area.
-
-IMPORTANT:
-The upper-right minimap may display "(안전)".
-"(안전)" means the current area is PK-disabled/a safe zone.
-It does NOT mean the player is necessarily in a town.
-Many towns normally show "(안전)", but other non-town safe areas
-can also show it.
-
-Therefore "(안전)" is supporting evidence only.
-Do NOT return YES from "(안전)" alone.
-
-Use additional visual context such as town buildings, streets,
-NPCs, shops/buildings, or a clearly recognizable town/base scene.
-
-NO when:
-- active battle/combat is visible
-- enemies/target combat UI are present
-- the player is in the hunting/field area
-- inventory/equipment is open
-- a merchant shop is open
-- a general menu is open
-- only "(안전)" is visible without clear town/base context
-
-A town screen is NOT the same as a generic safe zone.
-
-If uncertain, return NO.
-
-Do not add explanations.
-"""
-
-
-
-def verify_home(frame):
-
-    try:
-        result = ollama_chat(
-            HOME_VERIFY_PROMPT,
-            image=frame
-        )
-
-        text = (
-            result
-            .get("message", {})
-            .get("content", "")
-        )
-
-        print("[HOME RAW]", text)
-
-        m = YES_NO_RE.search(text)
-
-        if not m:
-            return None
-
-        yes = m.group(1).upper() == "YES"
-
-        conf = float(m.group(2))
-
-        if conf > 1:
-            conf /= 100
-
-        accepted = (
-            yes
-            and conf >= INVENTORY_MIN_CONFIDENCE
-        )
-
-        print("[HOME]", accepted, conf)
-
-        return accepted
-
-    except Exception as e:
-        print("[HOME ERROR]", e)
-        return False
-
-
-# ============================================================
-# SHOP VERIFY
-# ============================================================
-
-
-SHOP_VERIFY_PROMPT = """
-
-Is a real merchant SHOP interface open?
-
-Return ONLY one line.
-
-Format:
-
-YES|0.95
-
-or
-
-NO|0.95
-
-YES when there is a merchant shop/product interface with one or
-more of these visible:
-- product/item rows offered for sale
-- prices or currency beside products
-- BUY/SELL/PURCHASE controls
-- merchant/shop title or shop-specific controls
-
-NO for:
-- player inventory/equipment
-- battle
-- ordinary gameplay
-- town/home
-- general menu
-
-If uncertain, return NO.
-
-Do not add explanations.
-"""
-
-
-def verify_shop(frame):
-
-    try:
-        result = ollama_chat(
-            SHOP_VERIFY_PROMPT,
-            image=frame
-        )
-
-        text = (
-            result
-            .get("message", {})
-            .get("content", "")
-        )
-
-        print("[SHOP RAW]", text)
-
-        if is_vlm_failure(text):
-            print("[SHOP FAILURE] invalid/repeated model output")
-            restart_vlm_after_repeated_failure()
-            return None
-
-        m = YES_NO_RE.search(text)
-
-        if not m:
-            return False
-
-        yes = m.group(1).upper() == "YES"
-
-        conf = float(m.group(2))
-
-        if conf > 1:
-            conf /= 100
-
-        accepted = (
-            yes
-            and conf >= INVENTORY_MIN_CONFIDENCE
-        )
-
-        print("[SHOP]", accepted, conf)
-
-        return accepted
-
-    except Exception as e:
-        print("[SHOP ERROR]", e)
-        return False
-
-
-# ============================================================
-# TARGET PARSER
-# ============================================================
-
-
-def parse_target(raw):
-
-    if not raw:
-        return None
-
-    text = raw.upper()
-
-    # BACK ACTION
-    if "BACK" in text:
-        return {
-            "action": "back",
-            "reason": "model requested back"
-        }
-
-    if "NONE" in text:
-        return None
-
-    m = TARGET_RE.search(raw)
-
-    if not m:
-        return None
-
-    x = int(m.group(1))
-    y = int(m.group(2))
-    conf = float(m.group(3))
-
-    if conf > 1:
-        conf /= 100
-
-    reason = m.group(4).strip()
-
-    if not (
-        0 <= x < VISION_WIDTH
-        and
-        0 <= y < VISION_HEIGHT
-    ):
-        print("[TARGET] invalid coordinate")
-        return None
-
-    if conf < TARGET_MIN_CONFIDENCE:
-        return None
-
-    ax, ay = vision_to_adb(x, y)
-
-    return {
-        "vision_x": x,
-        "vision_y": y,
-        "adb_x": ax,
-        "adb_y": ay,
-        "confidence": conf,
-        "reason": reason,
-    }
-
-
-def detect_auto_button(frame):
-    """Detect only the game's native AUTO hunting control. Never detects monsters."""
-    try:
-        result = ollama_chat(
-            AUTO_TARGET_PROMPT,
-            image=frame
-        )
-        raw = (
-            result
-            .get("message", {})
-            .get("content", "")
-        )
-        print("[AUTO RAW]", raw)
-        target = parse_target(raw)
-        if target is None:
-            print("[AUTO NONE]")
-            return None
-        if target.get("confidence", 0.0) < AUTO_MIN_CONFIDENCE:
-            print("[AUTO REJECTED] confidence", target.get("confidence"))
-            return None
-        reason = target.get("reason", "").lower()
-        if "auto" not in reason and "자동" not in reason:
-            print("[AUTO REJECTED] reason does not identify AUTO:", target.get("reason"))
-            return None
-        print("[AUTO FOUND]", target)
-        return target
     except Exception as e:
         print("[AUTO ERROR]", repr(e))
         return None
 
+    raw = raw.strip()
+    print("[AUTO RAW]", raw)
+
+    m = AUTO_STATE_RE.match(raw)
+    if m:
+        confidence = float(m.group(1))
+        if confidence > 1.0:
+            confidence /= 100.0
+
+        if confidence >= AUTO_MIN_CONFIDENCE:
+            return {
+                "state": "ON",
+                "confidence": confidence,
+            }
+
+        print("[AUTO UNKNOWN] ON confidence too low")
+        return None
+
+    m = AUTO_OFF_RE.match(raw)
+    if m:
+        x = int(m.group(1))
+        y = int(m.group(2))
+        confidence = float(m.group(3))
+        if confidence > 1.0:
+            confidence /= 100.0
+
+        if (
+            0 <= x < VISION_WIDTH
+            and 0 <= y < VISION_HEIGHT
+            and confidence >= AUTO_MIN_CONFIDENCE
+        ):
+            ax, ay = vision_to_adb(x, y)
+            return {
+                "state": "OFF",
+                "vision_x": x,
+                "vision_y": y,
+                "adb_x": ax,
+                "adb_y": ay,
+                "confidence": confidence,
+                "reason": m.group(4).strip(),
+            }
+
+        print("[AUTO UNKNOWN] OFF result failed safety validation")
+        return None
+
+    print("[AUTO UNKNOWN] invalid response")
+    return None
 
 def detect_target(
     frame,
@@ -2307,6 +1853,7 @@ class VLMWorker:
         self.ocr_available_logged = False
         self.last_target_diagnostic_time = 0.0
         self.last_auto_action_time = 0.0
+        self.auto_off_confirm_count = 0
 
         self.stabilizer = StateStabilizer()
 
@@ -2538,8 +2085,8 @@ class VLMWorker:
         shop_verified = False
         home_verified = False
 
-        # Game-native AUTO mode: let the game handle monster targeting.
-        # Only the AUTO button itself is detected and tapped.
+        # Game-native AUTO mode.
+        # NEVER tap when AUTO is already ON or when the VLM result is uncertain.
         if (
             ENABLE_AUTO_ACTION
             and state in ("NORMAL", "BATTLE")
@@ -2547,20 +2094,42 @@ class VLMWorker:
             and now - self.last_auto_action_time >= AUTO_CHECK_INTERVAL
         ):
             self.last_auto_action_time = now
-            print("[AUTO TEST] detecting native AUTO button")
-            auto_target = detect_auto_button(frame)
-            if auto_target is not None:
+            print("[AUTO TEST] checking AUTO ON/OFF state")
+
+            auto_state = detect_auto_state(frame)
+
+            if auto_state is None:
+                self.auto_off_confirm_count = 0
+                print("[AUTO ACTION] no safe state -> NO TAP")
+
+            elif auto_state["state"] == "ON":
+                self.auto_off_confirm_count = 0
                 print(
-                    f"[AUTO ACTION] vision=({auto_target['vision_x']},{auto_target['vision_y']}) "
-                    f"adb=({auto_target['adb_x']},{auto_target['adb_y']}) "
-                    f"confidence={auto_target['confidence']:.2f}"
+                    f"[AUTO STATE] ON confidence={auto_state['confidence']:.2f}"
                 )
-                self.executor.tap(
-                    auto_target["adb_x"],
-                    auto_target["adb_y"]
+                print("[AUTO ACTION] already ON -> NO TAP")
+
+            elif auto_state["state"] == "OFF":
+                self.auto_off_confirm_count += 1
+                print(
+                    f"[AUTO STATE] OFF confidence={auto_state['confidence']:.2f} "
+                    f"confirm={self.auto_off_confirm_count}/{AUTO_OFF_CONFIRM_REQUIRED}"
                 )
-            else:
-                print("[AUTO ACTION] no safe AUTO button found")
+
+                if self.auto_off_confirm_count >= AUTO_OFF_CONFIRM_REQUIRED:
+                    print(
+                        f"[AUTO ACTION] OFF confirmed -> tap "
+                        f"vision=({auto_state['vision_x']},{auto_state['vision_y']}) "
+                        f"adb=({auto_state['adb_x']},{auto_state['adb_y']})"
+                    )
+                    self.executor.tap(
+                        auto_state["adb_x"],
+                        auto_state["adb_y"]
+                    )
+                    self.auto_off_confirm_count = 0
+                else:
+                    print("[AUTO ACTION] waiting for second OFF confirmation")
+
 
         # Safe live target test. Detection is allowed, tapping is not.
         if (
