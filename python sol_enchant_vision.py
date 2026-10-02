@@ -324,7 +324,7 @@ def ollama_chat(
 
         "options":{
             "temperature":0.0,
-            "num_predict":32,
+            "num_predict":24,
             "repeat_penalty":1.15,
         }
 
@@ -1232,6 +1232,24 @@ def detect_state(frame):
 
 
 
+def is_vlm_failure(raw):
+
+    if not raw:
+        return True
+
+    text = str(raw).strip()
+
+    compact = re.sub(r"\\s+", "", text)
+
+    if len(compact) >= 8 and set(compact) == {"@"}:
+        return True
+
+    if "token repeat limit" in text.lower():
+        return True
+
+    return False
+
+
 def parse_state(raw):
     if not raw:
         return "UNKNOWN", 0.0
@@ -2037,11 +2055,33 @@ class VLMWorker:
         )
 
 
+        if is_vlm_failure(raw):
+
+            print(
+                "[VLM FAILURE]",
+                "invalid/repeated model output"
+            )
+
+            self.stabilizer.previous = None
+            self.stabilizer.count = 0
+
+            if self.stabilizer.confirmed is not None:
+
+                self.stabilizer.confirmed = None
+
+                print(
+                    "[STATE RESET]",
+                    "VLM failure -> UNKNOWN"
+                )
+
+            print("[CONFIRMED] None")
+
+            return
+
 
         state, confidence = parse_state(
             raw
         )
-
 
 
         inventory_verified = False
