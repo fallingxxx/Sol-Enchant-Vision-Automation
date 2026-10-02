@@ -1104,10 +1104,17 @@ def ocr_screen(frame):
         return []
 
     try:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        # Inventory and shop have a distinctive Korean title at the upper-left.
+        # OCR that small region at higher scale because full-screen OCR at
+        # 720x324 is too noisy to reliably read the title.
+        h, w = frame.shape[:2]
+        roi = frame[0:min(h, 150), 0:min(w, 380)]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=4.0, fy=4.0, interpolation=cv2.INTER_CUBIC)
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        processed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        processed = cv2.threshold(
+            gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )[1]
 
         data = pytesseract.image_to_data(
             processed,
@@ -1115,7 +1122,6 @@ def ocr_screen(frame):
             config="--psm 11",
             output_type=pytesseract.Output.DICT,
         )
-
         results = []
         for i, raw_text in enumerate(data.get("text", [])):
             text = str(raw_text).strip()
