@@ -2372,7 +2372,6 @@ class VLMWorker:
                     print("[UI TITLE CONFIRMED]", state)
                     return state, confidence
 
-                        return state, confidence
 
                     # A positive NO is real evidence that the screen is SHOP.
                     self.inventory_title_override_count = 0
