@@ -1,0 +1,11 @@
+name: Python syntax validation
+on:
+  push:
+    branches: [main]
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Python
+        run: python -m py_compile "python sol_enchant_vision.py"
