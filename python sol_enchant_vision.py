@@ -66,7 +66,9 @@ VLM_RETRY_DELAY = 0.5
 # serialized and a minimum gap is enforced between requests.
 VLM_REQUEST_LOCK = threading.Lock()
 VLM_LAST_END_TIME = 0.0
-VLM_MIN_GAP = 1.5
+VLM_MIN_GAP = 2.0
+HOME_VERIFY_INTERVAL = 5.0
+VLM_FAILURE_RESTART_THRESHOLD = 3
 
 
 # state
@@ -333,7 +335,7 @@ def ollama_chat(
 
         "options":{
             "temperature":0.0,
-            "num_predict":24,
+            "num_predict":12,
             "repeat_penalty":1.15,
         }
 
@@ -1262,6 +1264,23 @@ def detect_state(frame):
 
 
 
+def restart_vlm_after_repeated_failure():
+
+    print("[VLM RECOVERY] restarting vision model")
+
+    try:
+        subprocess.run(
+            ["ollama", "stop", MODEL],
+            timeout=20,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        time.sleep(1.0)
+        print("[VLM RECOVERY] model stopped; next request will reload it")
+    except Exception as e:
+        print("[VLM RECOVERY ERROR]", e)
+
+
 def is_vlm_failure(raw):
 
     if not raw:
@@ -1990,6 +2009,10 @@ class VLMWorker:
 
         self.last_frame_id = 0
 
+        self.last_home_verify_time = 0.0
+        self.cached_home_result = None
+        self.vlm_failure_streak = 0
+
         self.stabilizer = StateStabilizer()
 
         self.executor = ActionExecutor()
@@ -2089,6 +2112,12 @@ class VLMWorker:
                 "invalid/repeated model output"
             )
 
+            self.vlm_failure_streak += 1
+
+            if self.vlm_failure_streak >= VLM_FAILURE_RESTART_THRESHOLD:
+                restart_vlm_after_repeated_failure()
+                self.vlm_failure_streak = 0
+
             self.stabilizer.previous = None
             self.stabilizer.count = 0
 
@@ -2106,6 +2135,8 @@ class VLMWorker:
             return
 
 
+        self.vlm_failure_streak = 0
+
         state, confidence = parse_state(
             raw
         )
@@ -2118,9 +2149,12 @@ class VLMWorker:
 
         if state == "HOME":
 
-            # Do not repeatedly re-verify an already confirmed HOME state.
+            # Verify a new HOME candidate once. Do not repeatedly send
+            # the same screenshot to the vision model.
             if self.stabilizer.confirmed != "HOME":
                 home_verified = verify_home(frame)
+                self.last_home_verify_time = time.time()
+                self.cached_home_result = home_verified
 
                 if not home_verified:
                     print("[HOME rejected]")
@@ -2130,11 +2164,21 @@ class VLMWorker:
 
         if state == "BATTLE":
 
-            # BATTLE is the only candidate that needs HOME verification.
-            # "(안전)" alone is not enough: it only means PK-disabled
-            # safe zone and can exist outside town.
+            # Town/base scenes are often classified as BATTLE.
+            # Re-check HOME only periodically and use the cached result
+            # between checks to reduce VLM load.
+            now = time.time()
 
-            home_verified = verify_home(frame)
+            if (
+                self.cached_home_result is None
+                or now - self.last_home_verify_time >= HOME_VERIFY_INTERVAL
+            ):
+                home_verified = verify_home(frame)
+                self.last_home_verify_time = now
+                self.cached_home_result = home_verified
+            else:
+                home_verified = bool(self.cached_home_result)
+                print("[HOME CACHE]", home_verified)
 
             if home_verified:
                 print(
@@ -2142,6 +2186,13 @@ class VLMWorker:
                 )
                 state = "HOME"
                 confidence = 0.95
+
+            elif self.stabilizer.confirmed == "HOME":
+                # Explicit HOME=NO must immediately release stale HOME.
+                self.stabilizer.confirmed = None
+                self.stabilizer.previous = None
+                self.stabilizer.count = 0
+                print("[STATE RESET] HOME -> BATTLE candidate")
 
         # Once a verified screen is no longer visually present,
         # the normal stabilizer is allowed to replace the old
