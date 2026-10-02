@@ -1143,7 +1143,7 @@ def ocr_screen(frame):
 
 
 def detect_ui_title(frame):
-    """Detect upper-left UI title with multi-pass OCR."""
+    """Detect upper-left UI title and save a diagnostic crop when unknown."""
     if not OCR_ENABLED or not OCR_AVAILABLE or frame is None:
         return None, 0.0
     try:
@@ -1164,11 +1164,16 @@ def detect_ui_title(frame):
                     return "INVENTORY", 0.99
                 if "상점" in compact or "상인" in compact:
                     return "SHOP", 0.99
+
+        # Keep a single diagnostic crop for the first unknown title.
+        diagnostic_path = os.path.join(os.getcwd(), "ocr_title_debug.png")
+        if not os.path.exists(diagnostic_path):
+            cv2.imwrite(diagnostic_path, roi)
+            print("[OCR DEBUG] saved", diagnostic_path)
         return None, 0.0
     except Exception as e:
         print("[UI TITLE OCR ERROR]", repr(e))
         return None, 0.0
-
 def classify_ocr_state(ocr_results):
     """Return a state only when OCR finds a strong explicit keyword."""
     if not ocr_results:
