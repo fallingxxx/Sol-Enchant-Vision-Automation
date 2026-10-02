@@ -1149,6 +1149,46 @@ NONE
 """
 
 
+SHOP_TARGET_PROMPT = """
+The SHOP screen is confirmed.
+
+Find one safe navigation control that exits the shop
+or returns to normal gameplay.
+
+Prefer CLOSE, BACK, EXIT, or a clearly labeled return control.
+
+Do NOT select products.
+Do NOT press BUY, SELL, PURCHASE, or item rows.
+
+Return exactly:
+
+TARGET|x|y|confidence|reason
+
+If no safe navigation control is visible:
+
+NONE
+"""
+
+
+HOME_TARGET_PROMPT = """
+The HOME screen is confirmed.
+
+Find one visible control that returns from the home/base/town
+area toward the hunting or field gameplay area.
+
+Only choose a clearly labeled navigation control.
+Do NOT choose shops, NPCs, items, decorations, or unrelated icons.
+
+Return exactly:
+
+TARGET|x|y|confidence|reason
+
+If no safe hunting/field navigation control is visible:
+
+NONE
+"""
+
+
 
 # ============================================================
 # STATE
@@ -1378,16 +1418,20 @@ def parse_target(raw):
 
 def detect_target(
     frame,
-    inventory=False
+    inventory=False,
+    state=None
 ):
 
     try:
 
-        prompt = (
-            INVENTORY_TARGET_PROMPT
-            if inventory
-            else TARGET_PROMPT
-        )
+        if inventory:
+            prompt = INVENTORY_TARGET_PROMPT
+        elif state == "SHOP":
+            prompt = SHOP_TARGET_PROMPT
+        elif state == "HOME":
+            prompt = HOME_TARGET_PROMPT
+        else:
+            prompt = TARGET_PROMPT
 
         result = ollama_chat(
             prompt,
@@ -1884,7 +1928,8 @@ class VLMWorker:
                 confirmed
                 ==
                 "INVENTORY"
-            )
+            ),
+            state=confirmed
         )
 
 
