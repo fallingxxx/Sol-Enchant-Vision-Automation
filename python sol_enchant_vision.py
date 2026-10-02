@@ -1497,6 +1497,33 @@ def detect_auto_state(frame):
     print("[AUTO UNKNOWN] invalid response")
     return None
 
+def ollama_text_with_image(prompt, frame):
+    result = ollama_chat(
+        prompt,
+        image=frame,
+    )
+    return (
+        result
+        .get("message", {})
+        .get("content", "")
+        .strip()
+    )
+
+
+def detect_state(frame):
+    """Classify the current main screen with the state VLM."""
+    try:
+        raw = ollama_text_with_image(
+            STATE_PROMPT,
+            frame,
+        )
+        print("[STATE RAW]", raw)
+        return raw
+    except Exception as e:
+        print("[STATE ERROR]", repr(e))
+        return ""
+
+
 def detect_target(
     frame,
     inventory=False,
