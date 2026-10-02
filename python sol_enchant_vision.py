@@ -99,6 +99,7 @@ TARGET_RETRY_COUNT = 1
 DRY_RUN = False
 
 ENABLE_INVENTORY_ACTION = True
+ENABLE_SHOP_ACTION = False
 
 
 
@@ -1072,7 +1073,7 @@ SHOP or INVENTORY.
 
 INVENTORY_PROMPT = """
 
-Is a real inventory/equipment/items panel open?
+Is a real INVENTORY/EQUIPMENT screen open?
 
 Return ONLY one line.
 
@@ -1084,21 +1085,25 @@ or
 
 NO|0.95
 
+YES ONLY when the screen is a player's inventory/equipment/items
+management screen.
 
-Rules:
+IMPORTANT:
+A merchant SHOP is NOT inventory.
 
-YES means a real inventory/equipment/items management panel is visible.
+If the screen contains product rows, product prices, currency,
+BUY, SELL, PURCHASE, merchant/shop controls, or a merchant
+product list, return NO.
 
-NO means normal gameplay or another screen.
+A shop may also show many item icons. That still does NOT make it
+inventory.
+
+A normal gameplay HUD, battle screen, town/home screen, menu,
+or merchant shop is NOT inventory.
 
 The number must be a confidence value between 0 and 1.
 
-Do not write the word confidence.
-
 Do not add explanations.
-
-A normal gameplay HUD is NOT inventory.
-
 """
 
 
@@ -1355,6 +1360,87 @@ def verify_inventory(frame):
         return False
 
 
+
+
+# ============================================================
+# SHOP VERIFY
+# ============================================================
+
+
+SHOP_VERIFY_PROMPT = """
+
+Is a real merchant SHOP interface open?
+
+Return ONLY one line.
+
+Format:
+
+YES|0.95
+
+or
+
+NO|0.95
+
+YES when there is a merchant shop/product interface with one or
+more of these visible:
+- product/item rows offered for sale
+- prices or currency beside products
+- BUY/SELL/PURCHASE controls
+- merchant/shop title or shop-specific controls
+
+NO for:
+- player inventory/equipment
+- battle
+- ordinary gameplay
+- town/home
+- general menu
+
+If uncertain, return NO.
+
+Do not add explanations.
+"""
+
+
+def verify_shop(frame):
+
+    try:
+        result = ollama_chat(
+            SHOP_VERIFY_PROMPT,
+            image=frame
+        )
+
+        text = (
+            result
+            .get("message", {})
+            .get("content", "")
+        )
+
+        print("[SHOP RAW]", text)
+
+        m = YES_NO_RE.search(text)
+
+        if not m:
+            return False
+
+        yes = m.group(1).upper() == "YES"
+
+        conf = float(m.group(2))
+
+        if conf > 1:
+            conf /= 100
+
+        accepted = (
+            yes
+            and conf >= INVENTORY_MIN_CONFIDENCE
+        )
+
+        print("[SHOP]", accepted, conf)
+
+        return accepted
+
+    except Exception as e:
+        print("[SHOP ERROR]", e)
+        return False
 
 
 # ============================================================
@@ -1865,23 +1951,55 @@ class VLMWorker:
 
         if state == "INVENTORY":
 
+            # SHOP must be checked before accepting INVENTORY.
+            # The game shop also contains item rows, so the VLM
+            # can otherwise mistake it for the inventory screen.
 
-            inventory_verified = verify_inventory(frame)
-
-
-            if not inventory_verified:
+            if verify_shop(frame):
 
                 print(
-                    "[INVENTORY rejected]"
+                    "[STATE OVERRIDE] INVENTORY -> SHOP"
                 )
 
-                state = "NORMAL"
+                state = "SHOP"
+                confidence = 0.95
 
-                confidence = 0.8
+            else:
+
+                inventory_verified = verify_inventory(frame)
+
+                if not inventory_verified:
+
+                    print(
+                        "[INVENTORY rejected]"
+                    )
+
+                    state = "NORMAL"
+                    confidence = 0.8
 
 
 
-        if inventory_verified:
+        if state == "SHOP":
+
+            confirmed = "SHOP"
+
+            changed = (
+                self.stabilizer.confirmed
+                !=
+                "SHOP"
+            )
+
+            self.stabilizer.confirmed = "SHOP"
+            self.stabilizer.previous = "SHOP"
+            self.stabilizer.count = 0
+
+            if changed:
+                print(
+                    "[STATE CHANGE]",
+                    "SHOP"
+                )
+
+        elif inventory_verified:
 
             confirmed = "INVENTORY"
 
@@ -1946,6 +2064,19 @@ class VLMWorker:
             print("[ACTION] INVENTORY -> BACK")
 
             self.executor.back()
+
+            return
+
+        # SHOP is detection-only for now.
+        # Do not automatically close or interact with the shop
+        # until its recognition is verified on the real game screen.
+
+        if (
+            confirmed == "SHOP"
+            and not ENABLE_SHOP_ACTION
+        ):
+
+            print("[ACTION] SHOP detected - no action")
 
             return
 
