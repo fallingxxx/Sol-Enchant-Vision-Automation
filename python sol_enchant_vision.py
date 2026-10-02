@@ -1577,10 +1577,10 @@ def detect_state(frame):
 
 
 STATE_RE = re.compile(
-    r"^\\s*(NORMAL|BATTLE|MENU|INVENTORY|SHOP|HOME|UNKNOWN)"
-    r"\\s*(?:[|:]\\s*)?"
-    r"(100(?:\\.\\d+)?|[0-9]{1,2}(?:\\.\\d+)?)?"
-    r"\\s*%?\\s*$",
+    r"^\s*(NORMAL|BATTLE|MENU|INVENTORY|SHOP|HOME|UNKNOWN)"
+    r"\s*(?:[|:]\s*)?"
+    r"(100(?:\.\d+)?|[0-9]{1,2}(?:\.\d+)?)?"
+    r"\s*%?\s*$",
     re.I,
 )
 
