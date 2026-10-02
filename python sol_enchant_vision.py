@@ -1,5 +1,6 @@
 import base64
 import msvcrt
+import os
 import re
 import socket
 import subprocess
