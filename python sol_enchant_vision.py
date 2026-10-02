@@ -1419,13 +1419,13 @@ NONE
 # AUTO ON/OFF is NOT determined from a single VLM frame.
 # The game shows a rotating/glowing ring when AUTO is active and
 # the same ring becomes stationary when AUTO is inactive.
-AUTO_ROI_X1 = 600
+AUTO_ROI_X1 = 635
 AUTO_ROI_Y1 = 105
-AUTO_ROI_X2 = 720
+AUTO_ROI_X2 = 719
 AUTO_ROI_Y2 = 220
 
 # Safe tap point inside the known AUTO control area.
-AUTO_TAP_VISION_X = 628
+AUTO_TAP_VISION_X = 690
 AUTO_TAP_VISION_Y = 176
 
 AUTO_MOTION_THRESHOLD = 3.0
