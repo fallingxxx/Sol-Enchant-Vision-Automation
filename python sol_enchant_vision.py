@@ -1416,7 +1416,9 @@ NONE
 
 
 # AUTO button is a fixed game UI control near the right-center edge.
-# We classify only the button state with VLM and never ask the model for coordinates.
+# AUTO ON/OFF is NOT determined from a single VLM frame.
+# The game shows a rotating/glowing ring when AUTO is active and
+# the same ring becomes stationary when AUTO is inactive.
 AUTO_ROI_X1 = 600
 AUTO_ROI_Y1 = 105
 AUTO_ROI_X2 = 720
@@ -1426,38 +1428,18 @@ AUTO_ROI_Y2 = 220
 AUTO_TAP_VISION_X = 660
 AUTO_TAP_VISION_Y = 162
 
-AUTO_STATE_PROMPT = """
-Inspect only the provided right-side AUTO / 자동사냥 control area.
+AUTO_MOTION_THRESHOLD = 3.0
+AUTO_MOTION_MIN_ACTIVE_PIXELS = 0.02
+AUTO_MOTION_HISTORY_REQUIRED = 3
+AUTO_OFF_CONFIRM_REQUIRED = 2
 
-Return exactly ONE line:
-ON|confidence
-or
-OFF|confidence
-or
-UNKNOWN
+def measure_auto_motion(frame):
+    """
+    Measure temporal visual change in the fixed AUTO control region.
 
-ON = AUTO is visibly active.
-OFF = AUTO is visibly inactive and the AUTO control is clearly visible.
-UNKNOWN = state cannot be determined safely.
-
-Do not output coordinates.
-Do not guess.
-Ignore all other game UI.
-Confidence must be 0 to 1.
-"""
-
-AUTO_STATE_RE = re.compile(
-    r"^ON\s*[|:]\s*(100(?:\.\d+)?|[0-9]{1,2}(?:\.\d+)?)\s*$",
-    re.I,
-)
-
-AUTO_OFF_RE = re.compile(
-    r"^OFF\s*[|:]\s*(100(?:\.\d+)?|[0-9]{1,2}(?:\.\d+)?)\s*$",
-    re.I,
-)
-
-
-def detect_auto_state(frame):
+    This is deliberately independent of VLM. A single frame cannot tell
+    whether the ring is rotating; consecutive frames are required.
+    """
     try:
         roi = frame[
             AUTO_ROI_Y1:AUTO_ROI_Y2,
@@ -1465,61 +1447,123 @@ def detect_auto_state(frame):
         ]
 
         if roi is None or roi.size == 0:
-            print("[AUTO UNKNOWN] empty ROI")
             return None
 
-        raw = ollama_text_with_image(
-            AUTO_STATE_PROMPT,
-            roi,
-        )
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        return gray
+
     except Exception as e:
-        print("[AUTO ERROR]", repr(e))
+        print("[AUTO CV ERROR]", repr(e))
         return None
 
-    raw = raw.strip()
-    print("[AUTO RAW]", raw)
 
-    m = AUTO_STATE_RE.match(raw)
-    if m:
-        confidence = float(m.group(1))
-        if confidence > 1.0:
-            confidence /= 100.0
+def detect_auto_state(frame):
+    """
+    Detect AUTO state from temporal motion of the ring.
 
-        if confidence >= AUTO_MIN_CONFIDENCE:
-            return {
-                "state": "ON",
-                "confidence": confidence,
-            }
+    ON  = the ring is visibly changing/rotating across frames.
+    OFF = the ring is stationary across frames.
+    UNKNOWN = insufficient temporal evidence.
 
-        print("[AUTO UNKNOWN] ON confidence too low")
+    No VLM request is made here.
+    """
+    current = measure_auto_motion(frame)
+
+    if current is None:
         return None
 
-    m = AUTO_OFF_RE.match(raw)
-    if m:
-        confidence = float(m.group(1))
-        if confidence > 1.0:
-            confidence /= 100.0
+    history = getattr(detect_auto_state, "_history", [])
+    history.append(current)
 
-        if confidence >= AUTO_MIN_CONFIDENCE:
-            ax, ay = vision_to_adb(
-                AUTO_TAP_VISION_X,
-                AUTO_TAP_VISION_Y,
+    if len(history) > AUTO_MOTION_HISTORY_REQUIRED:
+        history.pop(0)
+
+    detect_auto_state._history = history
+
+    if len(history) < AUTO_MOTION_HISTORY_REQUIRED:
+        print(
+            f"[AUTO CV] collecting frames "
+            f"{len(history)}/{AUTO_MOTION_HISTORY_REQUIRED}"
+        )
+        return None
+
+    differences = []
+
+    for previous, latest in zip(history[:-1], history[1:]):
+        diff = cv2.absdiff(previous, latest)
+
+        # Ignore tiny compression/noise changes.
+        active_pixels = float(
+            (diff >= 8).mean()
+        )
+
+        mean_change = float(
+            diff.mean()
+        )
+
+        differences.append(
+            (mean_change, active_pixels)
+        )
+
+    mean_change = sum(x[0] for x in differences) / len(differences)
+    active_ratio = sum(x[1] for x in differences) / len(differences)
+
+    moving = (
+        mean_change >= AUTO_MOTION_THRESHOLD
+        and active_ratio >= AUTO_MOTION_MIN_ACTIVE_PIXELS
+    )
+
+    confidence = min(
+        0.99,
+        max(
+            0.0,
+            (
+                mean_change / max(AUTO_MOTION_THRESHOLD * 3.0, 1.0)
             )
-            return {
-                "state": "OFF",
-                "vision_x": AUTO_TAP_VISION_X,
-                "vision_y": AUTO_TAP_VISION_Y,
-                "adb_x": ax,
-                "adb_y": ay,
-                "confidence": confidence,
-            }
+        )
+    )
 
-        print("[AUTO UNKNOWN] OFF confidence too low")
-        return None
+    if moving:
+        confidence = max(confidence, 0.85)
 
-    print("[AUTO UNKNOWN] invalid response")
-    return None
+        print(
+            f"[AUTO CV] MOVING mean={mean_change:.2f} "
+            f"active={active_ratio:.3f} confidence={confidence:.2f}"
+        )
 
+        return {
+            "state": "ON",
+            "confidence": confidence,
+        }
+
+    confidence = max(
+        0.85,
+        1.0 - min(
+            1.0,
+            mean_change / max(AUTO_MOTION_THRESHOLD * 2.0, 1.0)
+        )
+    )
+
+    ax, ay = vision_to_adb(
+        AUTO_TAP_VISION_X,
+        AUTO_TAP_VISION_Y,
+    )
+
+    print(
+        f"[AUTO CV] STATIONARY mean={mean_change:.2f} "
+        f"active={active_ratio:.3f} confidence={confidence:.2f}"
+    )
+
+    return {
+        "state": "OFF",
+        "vision_x": AUTO_TAP_VISION_X,
+        "vision_y": AUTO_TAP_VISION_Y,
+        "adb_x": ax,
+        "adb_y": ay,
+        "confidence": confidence,
+    }
 
 def is_vlm_failure(raw):
     """Return True only when the VLM response is genuinely unusable."""
