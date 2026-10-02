@@ -11,6 +11,13 @@ import av
 import cv2
 import requests
 
+try:
+    import pytesseract
+    OCR_AVAILABLE = True
+except Exception:
+    pytesseract = None
+    OCR_AVAILABLE = False
+
 
 # ============================================================
 # CONFIG
@@ -70,6 +77,12 @@ VLM_LAST_END_TIME = 0.0
 VLM_MIN_GAP = 2.0
 HOME_VERIFY_INTERVAL = 3.0
 VLM_FAILURE_RESTART_THRESHOLD = 3
+
+# OCR primary detection. OCR is intentionally much cheaper than VLM.
+OCR_ENABLED = True
+OCR_INTERVAL = 0.5
+OCR_MIN_TEXT_CONFIDENCE = 45
+OCR_LANG = "kor+eng"
 
 
 # state
@@ -1052,6 +1065,96 @@ class VisionCapture:
         )
         
 # ============================================================
+# OCR SCREEN DETECTION
+# ============================================================
+
+
+OCR_STATE_KEYWORDS = {
+    "SHOP": (
+        "상점", "상인", "구매", "상품", "판매상"
+    ),
+    "INVENTORY": (
+        "인벤토리", "가방", "장비", "아이템"
+    ),
+    "MENU": (
+        "메뉴"
+    ),
+    "HOME": (
+        "마을", "마을광장", "마을입구", "거점", "본거지"
+    ),
+}
+
+
+def normalize_ocr_text(text):
+    if not text:
+        return ""
+    return re.sub(r"\\s+", "", str(text)).lower()
+
+
+def ocr_screen(frame):
+    """Read visible screen text only. Never invent a state from coordinates."""
+    if not OCR_ENABLED or not OCR_AVAILABLE or frame is None:
+        return []
+
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        processed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+        data = pytesseract.image_to_data(
+            processed,
+            lang=OCR_LANG,
+            config="--psm 11",
+            output_type=pytesseract.Output.DICT,
+        )
+
+        results = []
+        for i, raw_text in enumerate(data.get("text", [])):
+            text = str(raw_text).strip()
+            if not text:
+                continue
+            try:
+                conf = float(data["conf"][i])
+            except Exception:
+                conf = 0.0
+            if conf < OCR_MIN_TEXT_CONFIDENCE:
+                continue
+            results.append({"text": text, "confidence": conf})
+
+        return results
+
+    except Exception as e:
+        print("[OCR ERROR]", repr(e))
+        return []
+
+
+def classify_ocr_state(ocr_results):
+    """Return a state only when OCR finds a strong explicit keyword."""
+    if not ocr_results:
+        return None, 0.0, []
+
+    texts = [item["text"] for item in ocr_results]
+    compact = "".join(normalize_ocr_text(t) for t in texts)
+    hits = []
+
+    for state, keywords in OCR_STATE_KEYWORDS.items():
+        for keyword in keywords:
+            key = normalize_ocr_text(keyword)
+            if key and key in compact:
+                hits.append((state, keyword))
+
+    # Shop wins over inventory because shop screens can contain item rows.
+    for priority_state in ("SHOP", "INVENTORY", "MENU", "HOME"):
+        matches = [h for h in hits if h[0] == priority_state]
+        if matches:
+            confidence = min(0.99, 0.80 + 0.05 * len(matches))
+            return priority_state, confidence, matches
+
+    return None, 0.0, hits
+
+
+# ============================================================
 # VLM STATE DETECTION
 # ============================================================
 
@@ -2002,6 +2105,9 @@ class VLMWorker:
         self.last_state_vlm_time = 0.0
         self.cached_state_raw = None
         self.vlm_failure_streak = 0
+        self.last_ocr_time = 0.0
+        self.cached_ocr_results = []
+        self.ocr_available_logged = False
 
         self.stabilizer = StateStabilizer()
 
@@ -2086,58 +2192,70 @@ class VLMWorker:
 
         now = time.time()
 
-        if (
-            self.cached_state_raw is not None
-            and now - self.last_state_vlm_time < STATE_VLM_INTERVAL
-        ):
-            raw = self.cached_state_raw
-            print("[STATE CACHE]", raw)
+        # --------------------------------------------------------
+        # OCR FIRST: explicit screen text is the cheap primary path.
+        # VLM is used only when OCR cannot identify the state.
+        # --------------------------------------------------------
+        if OCR_ENABLED and OCR_AVAILABLE:
+            if now - self.last_ocr_time >= OCR_INTERVAL:
+                self.cached_ocr_results = ocr_screen(frame)
+                self.last_ocr_time = now
+                if self.cached_ocr_results:
+                    print(
+                        "[OCR]",
+                        " | ".join(x["text"] for x in self.cached_ocr_results)
+                    )
+
+            ocr_state, ocr_confidence, ocr_hits = classify_ocr_state(
+                self.cached_ocr_results
+            )
         else:
-            raw = detect_state(
-                frame
-            )
-            self.cached_state_raw = raw
-            self.last_state_vlm_time = now
+            ocr_state, ocr_confidence, ocr_hits = None, 0.0, []
+            if not self.ocr_available_logged:
+                print("[OCR] unavailable - VLM fallback remains active")
+                self.ocr_available_logged = True
 
+        if ocr_state is not None:
+            state = ocr_state
+            confidence = ocr_confidence
+            print("[STATE OCR]", state, confidence, ocr_hits)
+            raw = None
+        else:
+            if (
+                self.cached_state_raw is not None
+                and now - self.last_state_vlm_time < STATE_VLM_INTERVAL
+            ):
+                raw = self.cached_state_raw
+                print("[STATE CACHE]", raw)
+            else:
+                print("[STATE VLM FALLBACK] OCR found no explicit state text")
+                raw = detect_state(frame)
+                self.cached_state_raw = raw
+                self.last_state_vlm_time = now
 
-        if is_vlm_failure(raw):
-
-            print(
-                "[VLM FAILURE]",
-                "invalid/repeated model output"
-            )
-
-            self.vlm_failure_streak += 1
-
-            if self.vlm_failure_streak >= VLM_FAILURE_RESTART_THRESHOLD:
-                restart_vlm_after_repeated_failure()
-                self.vlm_failure_streak = 0
-
-            self.stabilizer.previous = None
-            self.stabilizer.count = 0
-
-            if self.stabilizer.confirmed is not None:
-
-                self.stabilizer.confirmed = None
-
+            if is_vlm_failure(raw):
                 print(
-                    "[STATE RESET]",
-                    "VLM failure -> UNKNOWN"
+                    "[VLM FAILURE]",
+                    "invalid/repeated model output"
                 )
+                self.vlm_failure_streak += 1
+                if self.vlm_failure_streak >= VLM_FAILURE_RESTART_THRESHOLD:
+                    restart_vlm_after_repeated_failure()
+                    self.vlm_failure_streak = 0
+                self.stabilizer.previous = None
+                self.stabilizer.count = 0
+                if self.stabilizer.confirmed is not None:
+                    self.stabilizer.confirmed = None
+                    print("[STATE RESET]", "VLM failure -> UNKNOWN")
+                print("[CONFIRMED] None")
+                self.cached_state_raw = None
+                self.last_state_vlm_time = 0.0
+                return
 
-            print("[CONFIRMED] None")
-
-            self.cached_state_raw = None
-            self.last_state_vlm_time = 0.0
-
-            return
+            self.vlm_failure_streak = 0
+            state, confidence = parse_state(raw)
 
 
-        self.vlm_failure_streak = 0
-
-        state, confidence = parse_state(
-            raw
-        )
 
         if (
             state == "NORMAL"
@@ -2418,6 +2536,50 @@ class VLMWorker:
 
 
 # ============================================================
+# SINGLE IMAGE OCR TEST
+# ============================================================
+
+
+def run_ocr_test(capture):
+    print("=" * 60)
+    print("SOL ENCHANT - SINGLE IMAGE OCR TEST")
+    print("=" * 60)
+
+    if not OCR_AVAILABLE:
+        print("[OCR TEST] pytesseract is not installed")
+        print("[OCR TEST] Install: python -m pip install pytesseract")
+        return False
+
+    try:
+        print("[OCR TEST] Tesseract:", pytesseract.get_tesseract_version())
+    except Exception as e:
+        print("[OCR TEST] Tesseract executable unavailable:", repr(e))
+        return False
+
+    deadline = time.time() + 15
+    frame = None
+    frame_id = 0
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+        if frame is not None:
+            break
+        time.sleep(0.1)
+
+    if frame is None:
+        print("[OCR TEST ERROR] no video frame received")
+        return False
+
+    results = ocr_screen(frame)
+    state, confidence, hits = classify_ocr_state(results)
+
+    print("[OCR TEST] frame_id=", frame_id)
+    print("[OCR TEST TEXT]", " | ".join(x["text"] for x in results) or "<none>")
+    print("[OCR TEST STATE]", state, confidence, hits)
+    return True
+
+
+# ============================================================
 # SINGLE IMAGE VLM TEST
 # ============================================================
 
@@ -2554,8 +2716,11 @@ def main():
     # This avoids depending on argv[1] when PowerShell/launchers
     # add or reorder arguments.
     single_vlm_test = "--single-vlm-test" in sys.argv
+    single_ocr_test = "--ocr-test" in sys.argv
 
-    if single_vlm_test:
+    if single_ocr_test:
+        print("[MODE] ocr-test")
+    elif single_vlm_test:
         print("[MODE] single-vlm-test")
     else:
         print("[MODE] realtime")
@@ -2564,12 +2729,12 @@ def main():
     print("=" * 60)
 
 
-    if single_vlm_test:
-
+    if single_ocr_test:
+        print("SOL ENCHANT SINGLE IMAGE OCR TEST")
+    elif single_vlm_test:
         print(
             "SOL ENCHANT SINGLE IMAGE VLM TEST"
         )
-
     else:
 
         print(
@@ -2609,14 +2774,13 @@ def main():
         capture.start()
 
 
-        if single_vlm_test:
-
-            run_single_vlm_test(
-                capture
-            )
-
+        if single_ocr_test:
+            run_ocr_test(capture)
             return
 
+        if single_vlm_test:
+            run_single_vlm_test(capture)
+            return
 
         worker.start()
 
