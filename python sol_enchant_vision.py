@@ -119,7 +119,7 @@ INVENTORY_MIN_CONFIDENCE = 0.70
 
 # target
 
-ENABLE_TARGET_DETECTION = True
+ENABLE_TARGET_DETECTION = False
 
 TARGET_MIN_CONFIDENCE = 0.60
 
@@ -133,8 +133,13 @@ TARGET_RETRY_COUNT = 1
 DRY_RUN = False
 
 ENABLE_INVENTORY_ACTION = True
-ENABLE_SHOP_ACTION = True
+ENABLE_SHOP_ACTION = False
 ENABLE_HOME_ACTION = False
+
+# Game-native auto hunting. We do not detect or tap individual monsters.
+ENABLE_AUTO_ACTION = True
+AUTO_MIN_CONFIDENCE = 0.85
+AUTO_CHECK_INTERVAL = 5.0
 
 # Safe target diagnostic mode: detect and print coordinates, never tap.
 TARGET_DIAGNOSTIC_ONLY = False
@@ -1398,6 +1403,26 @@ NONE
 """
 
 
+AUTO_TARGET_PROMPT = """
+The Sol Enchant hunting screen is visible.
+
+Find the game's AUTO / 자동사냥 button.
+It is a UI control, not a monster and not an item.
+
+Return exactly:
+TARGET|x|y|confidence|reason
+
+The target must be the visible AUTO/자동사냥 control itself.
+Do not choose minimap, potion, inventory, chat, skill buttons,
+monster/enemy, character, or decorative icons.
+
+Only return TARGET when the AUTO control is clearly visible.
+Otherwise return:
+NONE
+"""
+
+
+
 HOME_TARGET_PROMPT = """
 The HOME screen is confirmed.
 
@@ -1895,6 +1920,37 @@ def parse_target(raw):
     }
 
 
+def detect_auto_button(frame):
+    """Detect only the game's native AUTO hunting control. Never detects monsters."""
+    try:
+        result = ollama_chat(
+            AUTO_TARGET_PROMPT,
+            image=frame
+        )
+        raw = (
+            result
+            .get("message", {})
+            .get("content", "")
+        )
+        print("[AUTO RAW]", raw)
+        target = parse_target(raw)
+        if target is None:
+            print("[AUTO NONE]")
+            return None
+        if target.get("confidence", 0.0) < AUTO_MIN_CONFIDENCE:
+            print("[AUTO REJECTED] confidence", target.get("confidence"))
+            return None
+        reason = target.get("reason", "").lower()
+        if "auto" not in reason and "자동" not in reason:
+            print("[AUTO REJECTED] reason does not identify AUTO:", target.get("reason"))
+            return None
+        print("[AUTO FOUND]", target)
+        return target
+    except Exception as e:
+        print("[AUTO ERROR]", repr(e))
+        return None
+
+
 def detect_target(
     frame,
     inventory=False,
@@ -2250,6 +2306,7 @@ class VLMWorker:
         self.cached_ocr_results = []
         self.ocr_available_logged = False
         self.last_target_diagnostic_time = 0.0
+        self.last_auto_action_time = 0.0
 
         self.stabilizer = StateStabilizer()
 
@@ -2480,6 +2537,30 @@ class VLMWorker:
         inventory_verified = False
         shop_verified = False
         home_verified = False
+
+        # Game-native AUTO mode: let the game handle monster targeting.
+        # Only the AUTO button itself is detected and tapped.
+        if (
+            ENABLE_AUTO_ACTION
+            and state in ("NORMAL", "BATTLE")
+            and not TARGET_DIAGNOSTIC_ONLY
+            and now - self.last_auto_action_time >= AUTO_CHECK_INTERVAL
+        ):
+            self.last_auto_action_time = now
+            print("[AUTO TEST] detecting native AUTO button")
+            auto_target = detect_auto_button(frame)
+            if auto_target is not None:
+                print(
+                    f"[AUTO ACTION] vision=({auto_target['vision_x']},{auto_target['vision_y']}) "
+                    f"adb=({auto_target['adb_x']},{auto_target['adb_y']}) "
+                    f"confidence={auto_target['confidence']:.2f}"
+                )
+                self.executor.tap(
+                    auto_target["adb_x"],
+                    auto_target["adb_y"]
+                )
+            else:
+                print("[AUTO ACTION] no safe AUTO button found")
 
         # Safe live target test. Detection is allowed, tapping is not.
         if (
@@ -2782,22 +2863,21 @@ class VLMWorker:
 
 
 
-        target = detect_target(
-            frame,
-            inventory=(
-                confirmed
-                ==
-                "INVENTORY"
-            ),
-            state=confirmed
-        )
+        if ENABLE_TARGET_DETECTION:
+            target = detect_target(
+                frame,
+                inventory=(
+                    confirmed
+                    ==
+                    "INVENTORY"
+                ),
+                state=confirmed
+            )
 
-
-
-        self.executor.execute(
-            confirmed,
-            target
-        )
+            self.executor.execute(
+                confirmed,
+                target
+            )
 
 
 
@@ -3004,6 +3084,7 @@ def main():
     single_vlm_test = "--single-vlm-test" in sys.argv
     single_ocr_test = "--ocr-test" in sys.argv
     target_test = "--target-test" in sys.argv
+    auto_test = "--auto-test" in sys.argv
 
     global TARGET_DIAGNOSTIC_ONLY
     TARGET_DIAGNOSTIC_ONLY = target_test
@@ -3014,6 +3095,8 @@ def main():
         print("[MODE] single-vlm-test")
     elif target_test:
         print("[MODE] target-test (NO TAP)")
+    elif auto_test:
+        print("[MODE] auto-test")
     else:
         print("[MODE] realtime")
 
@@ -3074,7 +3157,11 @@ def main():
             run_single_vlm_test(capture)
             return
 
-        worker.start()
+        if auto_test:
+            print("[AUTO TEST] start realtime AUTO-button detection")
+            worker.start()
+        else:
+            worker.start()
 
 
 
