@@ -1123,7 +1123,7 @@ OCR_STATE_KEYWORDS = {
 def normalize_ocr_text(text):
     if not text:
         return ""
-    return re.sub(r"\\s+", "", str(text)).lower()
+    return re.sub(r"\s+", "", str(text)).lower()
 
 
 def ocr_screen(frame):
@@ -1439,7 +1439,7 @@ Rules:
 """
 
 AUTO_STATE_RE = re.compile(
-    r"^ON\\s*[|:]\\s*(100(?:\\.\\d+)?|[0-9]{1,2}(?:\\.\\d+)?)\\s*$",
+    r"^ON\s*[|:]\s*(100(?:\.\d+)?|[0-9]{1,2}(?:\.\d+)?)\s*$",
     re.I,
 )
 
@@ -1619,6 +1619,320 @@ def parse_state(raw):
         return None, 0.0
 
     return state, confidence
+
+
+# INVENTORY VERIFY
+# ============================================================
+
+
+def verify_inventory(frame):
+
+
+    try:
+
+
+        # Build a visual probe that preserves the full screen while
+        # enlarging the tiny upper-left UI-title region. This addresses the
+        # exact failure mode where the full VLM sees an item grid and calls
+        # it SHOP, while the actual inventory title is too small to notice.
+        probe = frame
+        try:
+            h, w = frame.shape[:2]
+            title = frame[0:min(h, 64), 0:min(w, 180)]
+            title = cv2.resize(
+                title,
+                None,
+                fx=4.0,
+                fy=4.0,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            canvas_h = max(h, title.shape[0])
+            canvas_w = w + title.shape[1] + 8
+            probe = cv2.copyMakeBorder(
+                frame,
+                0,
+                canvas_h - h,
+                0,
+                title.shape[1] + 8,
+                cv2.BORDER_CONSTANT,
+                value=(0, 0, 0),
+            )
+            probe[0:title.shape[0], w + 8:w + 8 + title.shape[1]] = title
+        except Exception as e:
+            print("[INV PROBE ERROR]", e)
+
+        result = ollama_chat(
+            INVENTORY_PROMPT,
+            image=probe
+        )
+
+
+        text = (
+            result
+            .get("message", {})
+            .get("content","")
+        )
+
+
+        print(
+            "[INV RAW]",
+            text
+        )
+
+        if is_vlm_failure(text):
+            print("[INV FAILURE] invalid/repeated model output")
+            restart_vlm_after_repeated_failure()
+            return None
+
+
+
+        m = YES_NO_RE.search(
+            text
+        )
+
+
+        if not m:
+
+            return None
+
+
+
+        yes = (
+            m.group(1)
+            .upper()
+            ==
+            "YES"
+        )
+
+
+        conf = float(
+            m.group(2)
+        )
+
+
+        if conf > 1:
+
+            conf /= 100
+
+
+
+        accepted = (
+
+            yes
+
+            and
+
+            conf >= INVENTORY_MIN_CONFIDENCE
+
+        )
+
+
+        print(
+            "[INV]",
+            accepted,
+            conf
+        )
+
+
+        return accepted
+
+
+
+    except Exception as e:
+
+
+        print(
+            "[INV ERROR]",
+            e
+        )
+
+
+        return False
+
+
+
+
+# ============================================================
+# HOME VERIFY
+# ============================================================
+
+
+HOME_VERIFY_PROMPT = """
+Is the player currently in the actual town/home/base area?
+
+Return ONLY one line.
+
+Format:
+
+YES|0.95
+
+or
+
+NO|0.95
+
+YES only when the overall screenshot visually matches an actual
+town/home/base area.
+
+IMPORTANT:
+The upper-right minimap may display "(안전)".
+"(안전)" means the current area is PK-disabled/a safe zone.
+It does NOT mean the player is necessarily in a town.
+Many towns normally show "(안전)", but other non-town safe areas
+can also show it.
+
+Therefore "(안전)" is supporting evidence only.
+Do NOT return YES from "(안전)" alone.
+
+Use additional visual context such as town buildings, streets,
+NPCs, shops/buildings, or a clearly recognizable town/base scene.
+
+NO when:
+- active battle/combat is visible
+- enemies/target combat UI are present
+- the player is in the hunting/field area
+- inventory/equipment is open
+- a merchant shop is open
+- a general menu is open
+- only "(안전)" is visible without clear town/base context
+
+A town screen is NOT the same as a generic safe zone.
+
+If uncertain, return NO.
+
+Do not add explanations.
+"""
+
+
+
+def verify_home(frame):
+
+    try:
+        result = ollama_chat(
+            HOME_VERIFY_PROMPT,
+            image=frame
+        )
+
+        text = (
+            result
+            .get("message", {})
+            .get("content", "")
+        )
+
+        print("[HOME RAW]", text)
+
+        m = YES_NO_RE.search(text)
+
+        if not m:
+            return None
+
+        yes = m.group(1).upper() == "YES"
+
+        conf = float(m.group(2))
+
+        if conf > 1:
+            conf /= 100
+
+        accepted = (
+            yes
+            and conf >= INVENTORY_MIN_CONFIDENCE
+        )
+
+        print("[HOME]", accepted, conf)
+
+        return accepted
+
+    except Exception as e:
+        print("[HOME ERROR]", e)
+        return False
+
+
+# ============================================================
+# SHOP VERIFY
+# ============================================================
+
+
+SHOP_VERIFY_PROMPT = """
+
+Is a real merchant SHOP interface open?
+
+Return ONLY one line.
+
+Format:
+
+YES|0.95
+
+or
+
+NO|0.95
+
+YES when there is a merchant shop/product interface with one or
+more of these visible:
+- product/item rows offered for sale
+- prices or currency beside products
+- BUY/SELL/PURCHASE controls
+- merchant/shop title or shop-specific controls
+
+NO for:
+- player inventory/equipment
+- battle
+- ordinary gameplay
+- town/home
+- general menu
+
+If uncertain, return NO.
+
+Do not add explanations.
+"""
+
+
+def verify_shop(frame):
+
+    try:
+        result = ollama_chat(
+            SHOP_VERIFY_PROMPT,
+            image=frame
+        )
+
+        text = (
+            result
+            .get("message", {})
+            .get("content", "")
+        )
+
+        print("[SHOP RAW]", text)
+
+        if is_vlm_failure(text):
+            print("[SHOP FAILURE] invalid/repeated model output")
+            restart_vlm_after_repeated_failure()
+            return None
+
+        m = YES_NO_RE.search(text)
+
+        if not m:
+            return False
+
+        yes = m.group(1).upper() == "YES"
+
+        conf = float(m.group(2))
+
+        if conf > 1:
+            conf /= 100
+
+        accepted = (
+            yes
+            and conf >= INVENTORY_MIN_CONFIDENCE
+        )
+
+        print("[SHOP]", accepted, conf)
+
+        return accepted
+
+    except Exception as e:
+        print("[SHOP ERROR]", e)
+        return False
+
+
+# ============================================================
 
 
 def detect_target(
