@@ -3,6 +3,7 @@ import msvcrt
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -2336,6 +2337,131 @@ class VLMWorker:
 
 
 # ============================================================
+# SINGLE IMAGE VLM TEST
+# ============================================================
+
+
+def run_single_vlm_test(capture):
+
+
+    print("=" * 60)
+
+    print(
+        "SOL ENCHANT - SINGLE IMAGE VLM TEST"
+    )
+
+    print("=" * 60)
+
+    print(
+        "ONE Android frame -> ONE qwen2.5vl:3b image request"
+    )
+
+    print()
+
+
+    deadline = time.time() + 15
+
+    frame = None
+
+    frame_id = 0
+
+
+    while time.time() < deadline:
+
+
+        frame, frame_id = (
+            capture.get_snapshot()
+        )
+
+
+        if frame is not None:
+
+            break
+
+
+        time.sleep(
+            0.1
+        )
+
+
+    if frame is None:
+
+        print(
+            "[TEST ERROR] no video frame received"
+        )
+
+        return False
+
+
+    print(
+        "[TEST] frame received:",
+        frame.shape,
+        "frame_id=",
+        frame_id
+    )
+
+
+    print(
+        "[TEST] sending ONE VLM image request..."
+    )
+
+
+    try:
+
+
+        raw = detect_state(
+            frame
+        )
+
+
+        print(
+            "[TEST STATE RAW]",
+            raw
+        )
+
+
+        if is_vlm_failure(raw):
+
+            print(
+                "[TEST RESULT] VLM failure:",
+                "repeated/invalid output"
+            )
+
+            return False
+
+
+        state, confidence = parse_state(
+            raw
+        )
+
+
+        print(
+            "[TEST RESULT]",
+            "state=",
+            state,
+            "confidence=",
+            confidence
+        )
+
+
+        return True
+
+
+    except Exception as e:
+
+
+        print(
+            "[TEST ERROR]",
+            repr(e)
+        )
+
+
+        return False
+
+
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -2343,11 +2469,26 @@ class VLMWorker:
 def main():
 
 
+    single_vlm_test = (
+        len(sys.argv) > 1
+        and sys.argv[1] == "--single-vlm-test"
+    )
+
+
     print("=" * 60)
 
-    print(
-        "SOL ENCHANT REAL TIME VISION"
-    )
+
+    if single_vlm_test:
+
+        print(
+            "SOL ENCHANT SINGLE IMAGE VLM TEST"
+        )
+
+    else:
+
+        print(
+            "SOL ENCHANT REAL TIME VISION"
+        )
 
     print("=" * 60)
 
@@ -2380,6 +2521,15 @@ def main():
 
 
         capture.start()
+
+
+        if single_vlm_test:
+
+            run_single_vlm_test(
+                capture
+            )
+
+            return
 
 
         worker.start()
