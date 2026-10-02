@@ -1142,6 +1142,37 @@ def ocr_screen(frame):
         return []
 
 
+def detect_ui_title(frame):
+    """Dedicated OCR for the upper-left Korean UI title."""
+    if not OCR_ENABLED or not OCR_AVAILABLE or frame is None:
+        return None, 0.0
+
+    try:
+        h, w = frame.shape[:2]
+        roi = frame[0:min(h, 170), 0:min(w, 430)]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        enlarged = cv2.resize(gray, None, fx=5.0, fy=5.0, interpolation=cv2.INTER_CUBIC)
+
+        variants = [
+            enlarged,
+            cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+            cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1],
+        ]
+
+        for image in variants:
+            for psm in (6, 7, 11, 13):
+                text = pytesseract.image_to_string(image, lang=OCR_LANG, config=f"--psm {psm}")
+                compact = normalize_ocr_text(text)
+                if "인벤토리" in compact:
+                    return "INVENTORY", 0.99
+                if "상점" in compact or "상인" in compact:
+                    return "SHOP", 0.99
+
+        return None, 0.0
+    except Exception as e:
+        print("[UI TITLE OCR ERROR]", repr(e))
+        return None, 0.0
+
 def classify_ocr_state(ocr_results):
     """Return a state only when OCR finds a strong explicit keyword."""
     if not ocr_results:
@@ -2222,6 +2253,12 @@ class VLMWorker:
             ocr_state, ocr_confidence, ocr_hits = classify_ocr_state(
                 self.cached_ocr_results
             )
+
+            title_state, title_confidence = detect_ui_title(frame)
+            if title_state is not None:
+                ocr_state = title_state
+                ocr_confidence = title_confidence
+                ocr_hits = [(title_state, "UI_TITLE")]
         else:
             ocr_state, ocr_confidence, ocr_hits = None, 0.0, []
             if not self.ocr_available_logged:
