@@ -1383,10 +1383,20 @@ or
 NO|0.95
 
 YES when the player is actually standing in the town/base/home area.
-Look for persistent town context such as town buildings, streets,
+
+IMPORTANT GAME-SPECIFIC SIGNAL:
+The upper-right minimap displays "(안전)" when the player is normally
+in a safe town area. Treat a clearly visible "(안전)" marker on the
+upper-right map as a STRONG HOME/TOWN signal.
+
+Use the "(안전)" marker together with the surrounding screen:
+- "(안전)" + town/non-combat environment -> YES
+- "(안전)" visible but a merchant shop or inventory panel is open -> NO
+- active combat UI/enemies clearly visible -> NO
+
+Look for additional town context such as town buildings, streets,
 NPCs, shops/buildings, or a clearly non-combat town environment.
 
-IMPORTANT:
 Do NOT require a special HOME button or a literal word "HOME".
 The game may show the town only as a visual scene.
 
