@@ -83,7 +83,8 @@ VLM_REQUEST_LOCK = threading.Lock()
 VLM_LAST_END_TIME = 0.0
 VLM_MIN_GAP = 2.0
 HOME_VERIFY_INTERVAL = 3.0
-VLM_FAILURE_RESTART_THRESHOLD = 3
+VLM_FAILURE_RESTART_THRESHOLD = 1
+VLM_FAILURE_COOLDOWN = 5.0
 
 # OCR primary detection. OCR is intentionally much cheaper than VLM.
 OCR_ENABLED = True
@@ -2378,18 +2379,38 @@ class VLMWorker:
                     "[VLM FAILURE]",
                     "invalid/repeated model output"
                 )
+
                 self.vlm_failure_streak += 1
+
                 if self.vlm_failure_streak >= VLM_FAILURE_RESTART_THRESHOLD:
                     restart_vlm_after_repeated_failure()
                     self.vlm_failure_streak = 0
+
+                # A broken VLM response must not erase a state that was
+                # already confirmed by deterministic OCR / verification.
+                # Keep the last confirmed state while the model recovers.
+                if self.stabilizer.confirmed is not None:
+                    print(
+                        "[VLM FAILURE] retaining confirmed state",
+                        self.stabilizer.confirmed
+                    )
+                    self.cached_state_raw = None
+                    self.last_state_vlm_time = (
+                        time.time() + VLM_FAILURE_COOLDOWN
+                    )
+                    print(
+                        "[CONFIRMED]",
+                        self.stabilizer.confirmed
+                    )
+                    return
+
                 self.stabilizer.previous = None
                 self.stabilizer.count = 0
-                if self.stabilizer.confirmed is not None:
-                    self.stabilizer.confirmed = None
-                    print("[STATE RESET]", "VLM failure -> UNKNOWN")
                 print("[CONFIRMED] None")
                 self.cached_state_raw = None
-                self.last_state_vlm_time = 0.0
+                self.last_state_vlm_time = (
+                    time.time() + VLM_FAILURE_COOLDOWN
+                )
                 return
 
             self.vlm_failure_streak = 0
