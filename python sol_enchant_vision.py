@@ -2270,6 +2270,17 @@ class VLMWorker:
             confidence = ocr_confidence
             print("[STATE OCR]", state, confidence, ocr_hits)
             raw = None
+
+            # UI title OCR is deterministic evidence for inventory/shop.
+            if ocr_hits and any(hit[1] == "UI_TITLE" for hit in ocr_hits):
+                self.cached_state_raw = None
+                self.cached_state = state
+                self.cached_state_confidence = confidence
+                self.cached_state_time = now
+                self.last_confirmed_state = state
+                self.last_confirmed_confidence = confidence
+                print("[UI TITLE CONFIRMED]", state)
+                return state, confidence
         else:
             if (
                 self.cached_state_raw is not None
