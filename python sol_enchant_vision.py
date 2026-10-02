@@ -2469,10 +2469,15 @@ def run_single_vlm_test(capture):
 def main():
 
 
-    single_vlm_test = (
-        len(sys.argv) > 1
-        and sys.argv[1] == "--single-vlm-test"
-    )
+    # Accept the diagnostic flag anywhere in the command line.
+    # This avoids depending on argv[1] when PowerShell/launchers
+    # add or reorder arguments.
+    single_vlm_test = "--single-vlm-test" in sys.argv
+
+    if single_vlm_test:
+        print("[MODE] single-vlm-test")
+    else:
+        print("[MODE] realtime")
 
 
     print("=" * 60)
