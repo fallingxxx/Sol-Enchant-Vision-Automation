@@ -2432,7 +2432,21 @@ class VLMWorker:
 
         if state == "SHOP":
 
-            confirmed = "SHOP"
+            # A full-screen VLM can mistake the player's inventory for a
+            # merchant shop because both screens contain item grids/rows.
+            # When SHOP is proposed, explicitly re-check the inventory
+            # candidate before accepting SHOP. This is deliberately limited
+            # to the ambiguous SHOP path so it does not add another VLM call
+            # to ordinary gameplay frames.
+            inventory_candidate = verify_inventory(frame)
+
+            if inventory_candidate:
+                inventory_verified = True
+                print("[STATE OVERRIDE] SHOP -> INVENTORY")
+                state = "INVENTORY"
+                confidence = 0.95
+            else:
+                confirmed = "SHOP"
 
             changed = (
                 self.stabilizer.confirmed
