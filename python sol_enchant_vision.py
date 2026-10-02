@@ -2308,6 +2308,25 @@ class VLMWorker:
 
             # UI title OCR is deterministic evidence for inventory/shop.
             if ocr_hits and any(hit[1] == "UI_TITLE" for hit in ocr_hits):
+                # The title OCR is strong evidence, but it can confuse the
+                # tiny Korean INVENTORY title with SHOP. Do not return early
+                # on a SHOP title. Verify INVENTORY first so the visual
+                # verifier gets a chance to correct the OCR result.
+                if state == "SHOP":
+                    inventory_candidate = verify_inventory(frame)
+                    if inventory_candidate:
+                        print("[STATE OVERRIDE] UI_TITLE SHOP -> INVENTORY")
+                        state = "INVENTORY"
+                        confidence = 0.99
+                        self.cached_state_raw = None
+                        self.cached_state = state
+                        self.cached_state_confidence = confidence
+                        self.cached_state_time = now
+                        self.last_confirmed_state = state
+                        self.last_confirmed_confidence = confidence
+                        print("[UI TITLE CONFIRMED]", state)
+                        return state, confidence
+
                 self.cached_state_raw = None
                 self.cached_state = state
                 self.cached_state_confidence = confidence
