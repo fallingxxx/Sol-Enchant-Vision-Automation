@@ -498,7 +498,6 @@ class SocketReader:
 
 
         while len(self.buffer) < size:
-
             try:
 
                 data = self.sock.recv(
@@ -1001,7 +1000,6 @@ class VisionCapture:
 
 
 
-
     # --------------------------------------------------------
     # snapshot
     # --------------------------------------------------------
@@ -1430,9 +1428,9 @@ AUTO_ROI_Y2 = 200
 
 # Safe tap point confirmed from the latest auto_button_grid.jpg diagnostic.
 # The previous candidate (628,176) was visibly too far to the right.
-# The corrected center is approximately (592,164) in the 720x324 vision frame.
+# The corrected center is approximately (592,176) in the 720x324 vision frame.
 AUTO_TAP_VISION_X = 592
-AUTO_TAP_VISION_Y = 164
+AUTO_TAP_VISION_Y = 176
 
 AUTO_MOTION_THRESHOLD = 3.0
 AUTO_MOTION_MIN_ACTIVE_PIXELS = 0.02
@@ -1497,8 +1495,7 @@ def detect_auto_state(frame):
     detect_auto_state._history = history
 
     if len(history) < AUTO_MOTION_HISTORY_REQUIRED:
-        print(
-            f"[AUTO CV] collecting frames "
+        print(            f"[AUTO CV] collecting frames "
             f"{len(history)}/{AUTO_MOTION_HISTORY_REQUIRED}"
         )
         return None
@@ -1998,7 +1995,6 @@ def run_auto_force_tap_test(capture, worker):
 def run_auto_button_grid_diagnostic(capture):
     """
     No-touch AUTO button geometry diagnostic.
-
     Captures one live frame and creates a dense coordinate grid over the
     current AUTO ROI. Every grid point is labelled with both Vision and
     ADB coordinates. No input event is sent.
@@ -2497,8 +2493,7 @@ def verify_inventory(frame):
 
         print(
             "[INV]",
-            accepted,
-            conf
+            accepted,            conf
         )
 
 
@@ -2989,18 +2984,516 @@ class ActionExecutor:
         state,
         target
     ):
-
-
         if target is None:
+            print("[ACTION] no target")
+            return False
 
-            print(
-                "[ACTION] no target"
-            )
+        print("[ACTION]", state, target)
 
+        if target.get("action") == "back":
+            return self.back()
+
+        if "adb_x" in target and "adb_y" in target:
+            return self.tap(target["adb_x"], target["adb_y"])
+
+        print("[ACTION] invalid target")
+        return False
+
+
+# ============================================================
+# ROUTER / WORKER / MAIN
+# ============================================================
+
+HOME_TARGET_PROMPT = """
+The HOME/town screen is confirmed.
+Find one safe navigation control that returns to normal gameplay.
+Prefer CLOSE, BACK, EXIT, or a clearly labeled return control.
+Do not select NPCs, shops, items, or decoration.
+Return exactly:
+TARGET|x|y|confidence|reason
+or
+NONE
+"""
+
+
+class VLMWorker:
+    def __init__(self, capture):
+        self.capture = capture
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.last_frame_id = 0
+        self.stabilizer = StateStabilizer()
+        self.executor = ActionExecutor()
+
+    def start(self):
+        self.thread = threading.Thread(
+            target=self.run,
+            daemon=True
+        )
+        self.thread.start()
+
+    def run(self):
+        print("[WORKER] started")
+
+        while not self.stop_event.is_set():
+            frame, frame_id = self.capture.get_snapshot()
+
+            if frame is None:
+                time.sleep(0.1)
+                continue
+
+            if frame_id == self.last_frame_id:
+                time.sleep(0.1)
+                continue
+
+            self.last_frame_id = frame_id
+
+            try:
+                self.process(frame)
+            except Exception as e:
+                print("[WORKER ERROR]", repr(e))
+
+            time.sleep(VISION_INTERVAL)
+
+    def process(self, frame):
+        raw = detect_state(frame)
+        state, confidence = parse_state(raw)
+
+        print("[STATE PARSED]", state, confidence)
+
+        if state == "INVENTORY":
+            verified = verify_inventory(frame)
+
+            if verified is False:
+                print("[INVENTORY] rejected")
+                state = "NORMAL"
+                confidence = 0.80
+
+            elif verified is None:
+                print("[INVENTORY] verification unavailable")
+                return
+
+        confirmed, changed = self.stabilizer.update(
+            state,
+            confidence
+        )
+
+        print("[CONFIRMED]", confirmed)
+
+        if not changed:
             return
 
+        action = route_action(confirmed)
 
+        if action == "NONE":
+            return
+
+        target = detect_target(
+            frame,
+            inventory=(confirmed == "INVENTORY"),
+            state=confirmed
+        )
+
+        self.executor.execute(
+            confirmed,
+            target
+        )
+
+    def stop(self):
+        self.stop_event.set()
+
+        if self.thread:
+            self.thread.join(timeout=3)
+
+
+def _get_live_frame(capture, timeout=10.0):
+    deadline = time.time() + timeout
+    last_frame_id = -1
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is not None and frame_id != last_frame_id:
+            return frame, frame_id
+
+        last_frame_id = frame_id
+        time.sleep(0.05)
+
+    return None, 0
+
+
+def _save_debug_frame(frame, filename):
+    if frame is None:
+        return None
+
+    output_dir = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(output_dir, filename)
+
+    try:
+        if cv2.imwrite(path, frame):
+            print("[DEBUG] saved ->", path)
+            return path
+    except Exception as e:
+        print("[DEBUG SAVE ERROR]", repr(e))
+
+    return None
+
+
+def run_auto_force_tap_test(capture, executor):
+    print("=" * 60)
+    print("SOL ENCHANT - ONE-SHOT REAL AUTO TAP TEST")
+    print("=" * 60)
+    print("[AUTO FORCE TAP] NO OCR / NO VLM / NO RETRY")
+
+    frame, frame_id = _get_live_frame(
+        capture,
+        timeout=AUTO_TAP_TEST_TIMEOUT
+    )
+
+    if frame is None:
+        print("[AUTO FORCE TAP] ERROR -> no video frame")
+        return False
+
+    _save_debug_frame(frame, "auto_force_before.jpg")
+
+    vx = AUTO_TAP_VISION_X
+    vy = AUTO_TAP_VISION_Y
+    ax, ay = vision_to_adb(vx, vy)
+
+    print(
+        f"[AUTO FORCE TAP] Vision=({vx},{vy}) -> ADB=({ax},{ay})"
+    )
+
+    success = executor.tap(ax, ay)
+
+    if not success:
+        print("[AUTO FORCE TAP] FAILED -> ADB tap failed")
+        return False
+
+    print("[AUTO FORCE TAP] SUCCESS -> exactly one tap sent")
+
+    after_deadline = time.time() + 2.0
+    after_frame = None
+
+    while time.time() < after_deadline:
+        candidate, candidate_id = capture.get_snapshot()
+
+        if candidate is not None and candidate_id > frame_id:
+            after_frame = candidate
+            break
+
+        time.sleep(0.05)
+
+    if after_frame is not None:
+        _save_debug_frame(after_frame, "auto_force_after.jpg")
+
+    print("[AUTO FORCE TAP] NO SECOND TAP WILL BE SENT")
+    return True
+
+
+def run_auto_tap_test(capture, executor):
+    print("=" * 60)
+    print("SOL ENCHANT - REAL AUTO TAP TEST")
+    print("=" * 60)
+    print("[AUTO TAP TEST] fixed coordinate only; OCR cannot override it")
+
+    detect_auto_state._history = []
+
+    deadline = time.time() + AUTO_TAP_TEST_TIMEOUT
+    last_frame_id = -1
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        result = detect_auto_state(frame)
+
+        if result is None:
+            continue
 
         print(
-            "[ACTION]",
-            state,
+            "[AUTO BEFORE]",
+            result["state"],
+            f"confidence={result['confidence']:.2f}"
+        )
+
+        if result["state"] == "ON":
+            print("[AUTO TAP TEST] ABORT -> AUTO is already ON")
+            detect_auto_state._history = []
+            return False
+
+        if result["state"] == "OFF":
+            break
+    else:
+        print("[AUTO TAP TEST] ABORT -> could not confirm AUTO OFF")
+        detect_auto_state._history = []
+        return False
+
+    ax, ay = vision_to_adb(
+        AUTO_TAP_VISION_X,
+        AUTO_TAP_VISION_Y
+    )
+
+    print(
+        "[AUTO TAP TEST] FIXED TARGET:",
+        f"Vision=({AUTO_TAP_VISION_X},{AUTO_TAP_VISION_Y})",
+        f"ADB=({ax},{ay})"
+    )
+
+    if not executor.tap(ax, ay):
+        detect_auto_state._history = []
+        return False
+
+    print("[AUTO TAP TEST] ADB TAP succeeded")
+    detect_auto_state._history = []
+
+    verify_deadline = time.time() + AUTO_ON_VERIFY_TIMEOUT
+    last_frame_id = -1
+
+    while time.time() < verify_deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        result = detect_auto_state(frame)
+
+        if result is None:
+            continue
+
+        print(
+            "[AUTO AFTER]",
+            result["state"],
+            f"confidence={result['confidence']:.2f}"
+        )
+
+        if result["state"] == "ON":
+            print("[AUTO TAP TEST] VERIFIED -> AUTO ON")
+            detect_auto_state._history = []
+            return True
+
+    print("[AUTO TAP TEST] VERIFY FAILED -> no second tap attempted")
+    detect_auto_state._history = []
+    return False
+
+
+def run_auto_touch_test(capture, executor):
+    print("=" * 60)
+    print("SOL ENCHANT - REAL AUTO TOUCH-PRESS TEST")
+    print("=" * 60)
+
+    ax, ay = vision_to_adb(
+        AUTO_TAP_VISION_X,
+        AUTO_TAP_VISION_Y
+    )
+
+    print(
+        "[AUTO TOUCH TEST] FIXED TARGET:",
+        f"Vision=({AUTO_TAP_VISION_X},{AUTO_TAP_VISION_Y})",
+        f"ADB=({ax},{ay})"
+    )
+
+    success = executor.press(
+        ax,
+        ay,
+        150
+    )
+
+    print(
+        "[AUTO TOUCH TEST]",
+        "SUCCESS" if success else "FAILED"
+    )
+
+    return success
+
+
+def run_auto_button_grid_diagnostic(capture):
+    print("=" * 60)
+    print("SOL ENCHANT - AUTO BUTTON GRID DIAGNOSTIC")
+    print("=" * 60)
+    print("[AUTO GRID] NO TOUCH WILL BE SENT")
+
+    frame, frame_id = _get_live_frame(
+        capture,
+        timeout=AUTO_TAP_TEST_TIMEOUT
+    )
+
+    if frame is None:
+        print("[AUTO GRID] ERROR -> no video frame")
+        return False
+
+    output = frame.copy()
+
+    x1 = max(0, min(output.shape[1] - 1, AUTO_ROI_X1))
+    y1 = max(0, min(output.shape[0] - 1, AUTO_ROI_Y1))
+    x2 = max(x1, min(output.shape[1] - 1, AUTO_ROI_X2))
+    y2 = max(y1, min(output.shape[0] - 1, AUTO_ROI_Y2))
+
+    cv2.rectangle(
+        output,
+        (x1, y1),
+        (x2, y2),
+        (0, 255, 255),
+        2
+    )
+
+    xs = [x1, round((x1 + x2) / 2), x2]
+    ys = [y1, round((y1 + y2) / 2), y2]
+
+    for row, vy in enumerate(ys, 1):
+        for col, vx in enumerate(xs, 1):
+            ax, ay = vision_to_adb(vx, vy)
+
+            cv2.drawMarker(
+                output,
+                (vx, vy),
+                (255, 255, 255),
+                cv2.MARKER_CROSS,
+                12,
+                1
+            )
+
+            cv2.putText(
+                output,
+                f"G{row}{col} {ax},{ay}",
+                (
+                    max(2, vx - 30),
+                    min(output.shape[0] - 4, vy + 15)
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.30,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA
+            )
+
+    fx = int(round(AUTO_TAP_VISION_X))
+    fy = int(round(AUTO_TAP_VISION_Y))
+    fax, fay = vision_to_adb(
+        AUTO_TAP_VISION_X,
+        AUTO_TAP_VISION_Y
+    )
+
+    cv2.drawMarker(
+        output,
+        (fx, fy),
+        (0, 0, 255),
+        cv2.MARKER_TILTED_CROSS,
+        28,
+        3
+    )
+
+    cv2.putText(
+        output,
+        f"CURRENT ({fx},{fy}) -> ADB ({fax},{fay})",
+        (5, 18),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (0, 0, 255),
+        1,
+        cv2.LINE_AA
+    )
+
+    output_dir = os.path.dirname(
+        os.path.abspath(__file__)
+    )
+    path = os.path.join(
+        output_dir,
+        "auto_button_grid.jpg"
+    )
+
+    saved = cv2.imwrite(
+        path,
+        output
+    )
+
+    print(
+        "[AUTO GRID]",
+        f"Vision=({fx},{fy})",
+        f"ADB=({fax},{fay})",
+        "saved=",
+        saved,
+        path
+    )
+
+    return bool(saved)
+
+
+def run_auto_diagnostic(capture):
+    return run_auto_button_grid_diagnostic(capture)
+
+
+def main():
+    args = set(sys.argv[1:])
+
+    print("=" * 60)
+    print("SOL ENCHANT VISION AUTOMATION")
+    print("=" * 60)
+
+    check_adb()
+    print_coordinate_bridge()
+
+    capture = VisionCapture()
+    worker = VLMWorker(capture)
+
+    try:
+        capture.start()
+
+        if (
+            "--auto-button-grid" in args
+            or "--auto-diagnostic" in args
+        ):
+            return run_auto_button_grid_diagnostic(capture)
+
+        if "--auto-force-tap-test" in args:
+            return run_auto_force_tap_test(
+                capture,
+                worker.executor
+            )
+
+        if "--auto-touch-test" in args:
+            return run_auto_touch_test(
+                capture,
+                worker.executor
+            )
+
+        if "--auto-tap-test" in args:
+            return run_auto_tap_test(
+                capture,
+                worker.executor
+            )
+
+        worker.start()
+
+        print("Q = EXIT")
+
+        while True:
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+
+                if key.lower() == "q":
+                    print("[MAIN] exit")
+                    break
+
+            time.sleep(0.05)
+
+    except KeyboardInterrupt:
+        print("[MAIN] interrupt")
+
+    except Exception as e:
+        print("[MAIN ERROR]", repr(e))
+
+    finally:
+        worker.stop()
+        capture.stop()
+        print("[DONE]")
+
+
+if __name__ == "__main__":
+    main()
