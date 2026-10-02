@@ -1510,7 +1510,7 @@ def detect_auto_state(frame):
 
 
 def is_vlm_failure(raw):
-    """Return True when the VLM response is empty, malformed, or unusable."""
+    """Return True only when the VLM response is genuinely unusable."""
     if raw is None:
         return True
 
@@ -1533,14 +1533,17 @@ def is_vlm_failure(raw):
     if any(token in lowered for token in failure_tokens):
         return True
 
-    # A valid state response must contain one of the allowed state names.
-    state_match = STATE_RE.search(text)
+    # Use the same parser that owns state syntax and confidence handling.
+    # This keeps validation consistent with parse_state(), including plain
+    # responses such as "BATTLE" and confidence responses such as
+    # "BATTLE|90%".
+    state, confidence = parse_state(text)
 
-    if state_match:
+    if state in VALID_STATES:
         return False
 
-    # Also accept UNKNOWN as a valid, intentionally uncertain VLM result.
-    if re.search(r"^\\s*UNKNOWN\\s*$", text, re.I):
+    # UNKNOWN is a valid, intentionally uncertain VLM result.
+    if re.fullmatch(r"\s*UNKNOWN\s*", text, re.I):
         return False
 
     return True
