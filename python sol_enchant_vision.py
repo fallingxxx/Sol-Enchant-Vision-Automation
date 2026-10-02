@@ -1575,36 +1575,56 @@ def detect_auto_state(frame):
 
 def run_auto_tap_test(capture, worker):
     """
-    Perform exactly one real AUTO-button tap for hardware verification.
+    Real AUTO-button verification.
 
-    This is intentionally separate from normal AUTO detection so the user
-    can verify that ADB control reaches the physical device. It does not
-    use VLM and does not perform a second tap.
+    Safety:
+    - Requires the AUTO button to be detected as OFF before tapping.
+    - Sends exactly one real ADB tap.
+    - Then verifies that the visual AUTO animation becomes MOVING/ON.
+    - Never retaps automatically.
     """
     print("=" * 60)
-    print("SOL ENCHANT - REAL AUTO TAP TEST")
+    print("SOL ENCHANT - REAL AUTO TAP + VERIFY TEST")
     print("=" * 60)
+    print("[AUTO TAP TEST] IMPORTANT: AUTO must be OFF before this test")
     print("[AUTO TAP TEST] waiting for video frame")
 
     deadline = time.time() + AUTO_TAP_TEST_TIMEOUT
-    frame = None
-    frame_id = 0
+    last_frame_id = -1
+    before_state = None
 
     while time.time() < deadline:
         frame, frame_id = capture.get_snapshot()
-        if frame is not None:
-            break
-        time.sleep(0.1)
 
-    if frame is None:
-        print("[AUTO TAP TEST] no video frame received")
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        state = detect_auto_state(frame)
+
+        if state is not None:
+            print(
+                f"[AUTO BEFORE] {state['state']} "
+                f"confidence={state['confidence']:.2f} "
+                f"mean={state['mean_change']:.2f} "
+                f"active={state['active_ratio']:.3f}"
+            )
+
+            if state["state"] == "ON":
+                print("[AUTO TAP TEST] ABORT -> AUTO is already ON")
+                print("[AUTO TAP TEST] Turn AUTO OFF manually, then rerun.")
+                detect_auto_state._history = []
+                return False
+
+            if state["state"] == "OFF":
+                before_state = state
+                break
+
+    if before_state is None:
+        print("[AUTO TAP TEST] ABORT -> could not safely confirm AUTO OFF")
+        detect_auto_state._history = []
         return False
-
-    print("[AUTO TAP TEST] video OK frame_id=", frame_id)
-    print(
-        f"[AUTO TAP TEST] REAL TAP -> "
-        f"vision=({AUTO_TAP_VISION_X},{AUTO_TAP_VISION_Y})"
-    )
 
     adb_x, adb_y = vision_to_adb(
         AUTO_TAP_VISION_X,
@@ -1612,19 +1632,58 @@ def run_auto_tap_test(capture, worker):
     )
 
     print(
-        f"[AUTO TAP TEST] ADB TAP -> "
-        f"({adb_x},{adb_y})"
+        f"[AUTO TAP TEST] OFF confirmed -> "
+        f"REAL TAP vision=({AUTO_TAP_VISION_X},{AUTO_TAP_VISION_Y})"
+    )
+    print(
+        f"[AUTO TAP TEST] ADB TAP -> ({adb_x},{adb_y})"
     )
 
     success = worker.executor.tap(adb_x, adb_y)
 
-    if success:
-        print("[AUTO TAP TEST] SUCCESS -> adb shell input tap executed")
-    else:
+    if not success:
         print("[AUTO TAP TEST] FAILED -> ADB tap command failed")
+        detect_auto_state._history = []
+        return False
 
-    return success
+    print("[AUTO TAP TEST] ADB command succeeded")
+    print("[AUTO TAP TEST] verifying actual AUTO visual transition...")
 
+    # Do not let the pre-tap OFF frames influence the post-tap result.
+    detect_auto_state._history = []
+
+    verify_deadline = time.time() + AUTO_ON_VERIFY_TIMEOUT
+    last_frame_id = -1
+
+    while time.time() < verify_deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        last_frame_id = frame_id
+        state = detect_auto_state(frame)
+
+        if state is None:
+            continue
+
+        print(
+            f"[AUTO AFTER] {state['state']} "
+            f"confidence={state['confidence']:.2f} "
+            f"mean={state['mean_change']:.2f} "
+            f"active={state['active_ratio']:.3f}"
+        )
+
+        if state["state"] == "ON":
+            print("[AUTO TAP TEST] VERIFIED -> AUTO is actually ON")
+            detect_auto_state._history = []
+            return True
+
+    print("[AUTO TAP TEST] VERIFY FAILED -> AUTO did not become ON")
+    print("[AUTO TAP TEST] No second tap was attempted.")
+    detect_auto_state._history = []
+    return False
 
 def is_vlm_failure(raw):
     """Return True only when the VLM response is genuinely unusable."""
