@@ -1606,9 +1606,7 @@ def run_auto_tap_test(capture, worker):
         if state is not None:
             print(
                 f"[AUTO BEFORE] {state['state']} "
-                f"confidence={state['confidence']:.2f} "
-                f"mean={state['mean_change']:.2f} "
-                f"active={state['active_ratio']:.3f}"
+                f"confidence={state['confidence']:.2f}"
             )
 
             if state["state"] == "ON":
@@ -1670,9 +1668,7 @@ def run_auto_tap_test(capture, worker):
 
         print(
             f"[AUTO AFTER] {state['state']} "
-            f"confidence={state['confidence']:.2f} "
-            f"mean={state['mean_change']:.2f} "
-            f"active={state['active_ratio']:.3f}"
+            f"confidence={state['confidence']:.2f}"
         )
 
         if state["state"] == "ON":
