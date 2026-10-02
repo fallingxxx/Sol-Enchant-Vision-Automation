@@ -322,7 +322,8 @@ def ollama_chat(
 
         "options":{
             "temperature":0.0,
-            "num_predict":128,
+            "num_predict":32,
+            "repeat_penalty":1.15,
         }
 
     }
