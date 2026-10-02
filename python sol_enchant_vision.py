@@ -1678,21 +1678,18 @@ def run_auto_tap_test(capture, worker):
         detect_auto_state._history = []
         return False
 
-    auto_target = find_auto_text_target(frame)
-    if auto_target is not None:
-        tap_vx, tap_vy, _ = auto_target
-    else:
-        tap_vx, tap_vy = AUTO_TAP_VISION_X, AUTO_TAP_VISION_Y
-        print(
-            f"[AUTO OCR] AUTO text not found -> fallback vision="
-            f"({tap_vx},{tap_vy})"
-        )
+    # The diagnostic image showed that the OCR/text-center route can
+    # select a point to the right of the actual AUTO control.
+    # For the real tap test, use the image-confirmed fixed control center.
+    # Do not let OCR move the tap point.
+    tap_vx = AUTO_TAP_VISION_X
+    tap_vy = AUTO_TAP_VISION_Y
 
     adb_x, adb_y = vision_to_adb(tap_vx, tap_vy)
 
     print(
         f"[AUTO TAP TEST] OFF confirmed -> "
-        f"REAL TAP vision=({tap_vx:.1f},{tap_vy:.1f})"
+        f"FIXED REAL TAP vision=({tap_vx:.1f},{tap_vy:.1f})"
     )
     print(
         f"[AUTO TAP TEST] ADB TAP -> ({adb_x},{adb_y})"
