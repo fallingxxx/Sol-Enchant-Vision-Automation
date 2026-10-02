@@ -342,7 +342,15 @@ def ollama_chat(
 
 
 
-            r.raise_for_status()
+            if not r.ok:
+
+                print(
+                    "[OLLAMA HTTP]",
+                    r.status_code,
+                    r.text[:1000]
+                )
+
+                r.raise_for_status()
 
             return r.json()
 
