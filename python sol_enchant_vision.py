@@ -96,9 +96,9 @@ TARGET_RETRY_COUNT = 1
 
 # safety
 
-DRY_RUN = True
+DRY_RUN = False
 
-ENABLE_INVENTORY_ACTION = False
+ENABLE_INVENTORY_ACTION = True
 
 
 
@@ -593,6 +593,8 @@ class VisionCapture:
             f"video=true "
 
             f"audio=false "
+
+            f"turn_screen_off=true "
 
             f"control=false "
 
@@ -1847,6 +1849,19 @@ class VLMWorker:
 
 
         if action == "NONE":
+
+            return
+
+
+
+        if (
+            confirmed == "INVENTORY"
+            and ENABLE_INVENTORY_ACTION
+        ):
+
+            print("[ACTION] INVENTORY -> BACK")
+
+            self.executor.back()
 
             return
 
