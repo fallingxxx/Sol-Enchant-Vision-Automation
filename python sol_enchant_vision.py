@@ -1423,14 +1423,16 @@ NONE
 # main joystick. Image-based coordinate verification selected Vision
 # (628,176) for the supplied 720x324 frame. This is the latest confirmed
 # candidate from the AUTO grid diagnostic / real ADB tap test.
-AUTO_ROI_X1 = 575
+AUTO_ROI_X1 = 555
 AUTO_ROI_Y1 = 125
-AUTO_ROI_X2 = 650
-AUTO_ROI_Y2 = 205
+AUTO_ROI_X2 = 625
+AUTO_ROI_Y2 = 200
 
-# Safe tap point near the center of the visible AUTO control.
-AUTO_TAP_VISION_X = 628
-AUTO_TAP_VISION_Y = 176
+# Safe tap point confirmed from the latest auto_button_grid.jpg diagnostic.
+# The previous candidate (628,176) was visibly too far to the right.
+# The corrected center is approximately (592,164) in the 720x324 vision frame.
+AUTO_TAP_VISION_X = 592
+AUTO_TAP_VISION_Y = 164
 
 AUTO_MOTION_THRESHOLD = 3.0
 AUTO_MOTION_MIN_ACTIVE_PIXELS = 0.02
