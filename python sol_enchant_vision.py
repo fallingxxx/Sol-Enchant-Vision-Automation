@@ -2334,55 +2334,44 @@ class VLMWorker:
                 if state == "SHOP":
                     inventory_candidate = verify_inventory(frame)
 
+                    # The OCR title is repeatedly read as SHOP while the
+                    # inventory verifier returns false-positive YES on the
+                    # same merchant screen. Do not let a single VLM YES
+                    # overturn explicit SHOP evidence.
                     if inventory_candidate is None:
-                        # A failed VLM request is not evidence against the
-                        # current state. Never call the second verifier here.
-                        self.inventory_title_override_count = 0
-
                         if self.stabilizer.confirmed == "INVENTORY":
                             state = "INVENTORY"
                         else:
                             state = "SHOP"
 
-                        confidence = 0.99
-                        self.cached_state_raw = None
-                        self.cached_state = state
-                        self.cached_state_confidence = confidence
-                        self.cached_state_time = now
-                        self.last_confirmed_state = state
-                        self.last_confirmed_confidence = confidence
-                        print("[UI TITLE RETAINED]", state)
-                        return state, confidence
-
-                    if inventory_candidate:
-                        # One YES is not enough to overturn an explicit SHOP
-                        # title. Require two consecutive positive inventory
-                        # checks. This prevents the known qwen2.5vl false YES
-                        # from making SHOP -> INVENTORY -> SHOP oscillations.
-                        self.inventory_title_override_count += 1
-
+                    elif inventory_candidate is True:
+                        # Keep the explicit SHOP title unless INVENTORY has
+                        # already been independently confirmed. A transient
+                        # VLM YES is not sufficient to switch SHOP -> INVENTORY.
                         if self.stabilizer.confirmed == "INVENTORY":
-                            state = "INVENTORY"
-                        elif self.inventory_title_override_count >= 2:
-                            print("[STATE OVERRIDE] UI_TITLE SHOP -> INVENTORY")
                             state = "INVENTORY"
                         else:
                             state = "SHOP"
 
-                        confidence = 0.99
-                        self.cached_state_raw = None
-                        self.cached_state = state
-                        self.cached_state_confidence = confidence
-                        self.cached_state_time = now
-                        self.last_confirmed_state = state
-                        self.last_confirmed_confidence = confidence
+                    else:
+                        state = "SHOP"
 
-                        if state == "INVENTORY":
-                            self.stabilizer.confirmed = state
-                            self.stabilizer.previous = state
-                            self.stabilizer.count = 0
+                    confidence = 0.99
+                    self.cached_state_raw = None
+                    self.cached_state = state
+                    self.cached_state_confidence = confidence
+                    self.cached_state_time = now
+                    self.last_confirmed_state = state
+                    self.last_confirmed_confidence = confidence
 
-                        print("[UI TITLE CONFIRMED]", state)
+                    if state == "INVENTORY":
+                        self.stabilizer.confirmed = state
+                        self.stabilizer.previous = state
+                        self.stabilizer.count = 0
+
+                    print("[UI TITLE CONFIRMED]", state)
+                    return state, confidence
+
                         return state, confidence
 
                     # A positive NO is real evidence that the screen is SHOP.
