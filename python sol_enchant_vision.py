@@ -1497,6 +1497,44 @@ def detect_auto_state(frame):
     print("[AUTO UNKNOWN] invalid response")
     return None
 
+
+def is_vlm_failure(raw):
+    """Return True when the VLM response is empty, malformed, or unusable."""
+    if raw is None:
+        return True
+
+    text = str(raw).strip()
+
+    if not text:
+        return True
+
+    lowered = text.lower()
+
+    # Known transport/model failure strings must never become a state.
+    failure_tokens = (
+        "error",
+        "exception",
+        "timeout",
+        "failed",
+        "failure",
+    )
+
+    if any(token in lowered for token in failure_tokens):
+        return True
+
+    # A valid state response must contain one of the allowed state names.
+    state_match = STATE_RE.search(text)
+
+    if state_match:
+        return False
+
+    # Also accept UNKNOWN as a valid, intentionally uncertain VLM result.
+    if re.search(r"^\\s*UNKNOWN\\s*$", text, re.I):
+        return False
+
+    return True
+
+
 def ollama_text_with_image(prompt, frame):
     result = ollama_chat(
         prompt,
