@@ -2495,37 +2495,41 @@ class VLMWorker:
 
         if state == "INVENTORY":
 
-            # INVENTORY verification has priority. A shop verifier can
-            # falsely recognize the player's item grid as a merchant shop,
-            # especially after a VLM restart. Never let SHOP verification
-            # override a positively verified inventory screen.
+            # Resolve the ambiguous item-grid case with both independent
+            # verifiers. Inventory must not override an explicit SHOP title.
+            # SHOP must not override a positively verified inventory screen.
             inventory_verified = verify_inventory(frame)
 
             if inventory_verified:
 
-                state = "INVENTORY"
-                confidence = 0.95
+                # An explicit OCR SHOP title is stronger than the generic
+                # inventory VLM response. Keep SHOP in that case.
+                if state == "INVENTORY" and any(
+                    hit[1] == "UI_TITLE" and hit[0] == "SHOP"
+                    for hit in ocr_hits
+                ):
+                    shop_verified = verify_shop(frame)
+
+                    if shop_verified:
+                        print("[STATE OVERRIDE] INVENTORY -> SHOP")
+                        state = "SHOP"
+                        confidence = 0.99
+                    else:
+                        state = "INVENTORY"
+                        confidence = 0.95
+                else:
+                    state = "INVENTORY"
+                    confidence = 0.95
 
             else:
 
-                # Only consider SHOP after INVENTORY has explicitly failed.
                 if verify_shop(frame):
-
                     shop_verified = True
-
-                    print(
-                        "[STATE OVERRIDE] INVENTORY -> SHOP"
-                    )
-
+                    print("[STATE OVERRIDE] INVENTORY -> SHOP")
                     state = "SHOP"
                     confidence = 0.95
-
                 else:
-
-                    print(
-                        "[INVENTORY rejected]"
-                    )
-
+                    print("[INVENTORY rejected]")
                     state = "NORMAL"
                     confidence = 0.8
 
@@ -2533,16 +2537,22 @@ class VLMWorker:
 
         if state == "SHOP":
 
-            # A full-screen VLM can mistake the player's inventory for a
-            # merchant shop because both screens contain item grids/rows.
-            # Verify the inventory candidate before accepting SHOP.
-            inventory_candidate = verify_inventory(frame)
+            # An explicit SHOP title is deterministic evidence. Do not let
+            # the generic inventory verifier overturn it. Only use the
+            # inventory verifier when OCR did not explicitly identify SHOP.
+            explicit_shop_title = any(
+                hit[1] == "UI_TITLE" and hit[0] == "SHOP"
+                for hit in ocr_hits
+            )
 
-            if inventory_candidate:
-                inventory_verified = True
-                print("[STATE OVERRIDE] SHOP -> INVENTORY")
-                state = "INVENTORY"
-                confidence = 0.95
+            if not explicit_shop_title:
+                inventory_candidate = verify_inventory(frame)
+
+                if inventory_candidate:
+                    inventory_verified = True
+                    print("[STATE OVERRIDE] SHOP -> INVENTORY")
+                    state = "INVENTORY"
+                    confidence = 0.95
 
         if state == "SHOP":
 
