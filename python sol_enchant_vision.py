@@ -2495,26 +2495,32 @@ class VLMWorker:
 
         if state == "INVENTORY":
 
-            # SHOP must be checked before accepting INVENTORY.
-            # The game shop also contains item rows, so the VLM
-            # can otherwise mistake it for the inventory screen.
+            # INVENTORY verification has priority. A shop verifier can
+            # falsely recognize the player's item grid as a merchant shop,
+            # especially after a VLM restart. Never let SHOP verification
+            # override a positively verified inventory screen.
+            inventory_verified = verify_inventory(frame)
 
-            if verify_shop(frame):
+            if inventory_verified:
 
-                shop_verified = True
-
-                print(
-                    "[STATE OVERRIDE] INVENTORY -> SHOP"
-                )
-
-                state = "SHOP"
+                state = "INVENTORY"
                 confidence = 0.95
 
             else:
 
-                inventory_verified = verify_inventory(frame)
+                # Only consider SHOP after INVENTORY has explicitly failed.
+                if verify_shop(frame):
 
-                if not inventory_verified:
+                    shop_verified = True
+
+                    print(
+                        "[STATE OVERRIDE] INVENTORY -> SHOP"
+                    )
+
+                    state = "SHOP"
+                    confidence = 0.95
+
+                else:
 
                     print(
                         "[INVENTORY rejected]"
