@@ -2314,6 +2314,7 @@ class VLMWorker:
                 # verifier gets a chance to correct the OCR result.
                 if state == "SHOP":
                     inventory_candidate = verify_inventory(frame)
+
                     if inventory_candidate:
                         print("[STATE OVERRIDE] UI_TITLE SHOP -> INVENTORY")
                         state = "INVENTORY"
@@ -2326,6 +2327,30 @@ class VLMWorker:
                         self.last_confirmed_confidence = confidence
                         print("[UI TITLE CONFIRMED]", state)
                         return state, confidence
+
+                    # Do not let a transient/invalid INVENTORY verifier
+                    # response immediately flip an already confirmed
+                    # inventory screen back to SHOP. If SHOP is proposed
+                    # while INVENTORY is currently confirmed, require
+                    # positive SHOP verification before changing state.
+                    if self.stabilizer.confirmed == "INVENTORY":
+                        shop_candidate = verify_shop(frame)
+
+                        if shop_candidate:
+                            print("[STATE OVERRIDE] INVENTORY -> SHOP")
+                            state = "SHOP"
+                            confidence = 0.99
+                        else:
+                            state = "INVENTORY"
+                            confidence = 0.99
+                            self.cached_state_raw = None
+                            self.cached_state = state
+                            self.cached_state_confidence = confidence
+                            self.cached_state_time = now
+                            self.last_confirmed_state = state
+                            self.last_confirmed_confidence = confidence
+                            print("[UI TITLE RETAINED]", state)
+                            return state, confidence
 
                 self.cached_state_raw = None
                 self.cached_state = state
