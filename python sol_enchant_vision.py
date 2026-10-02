@@ -13,6 +13,12 @@ import requests
 
 try:
     import pytesseract
+
+# Windows Tesseract OCR executable
+TESSERACT_EXE = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+if os.path.exists(TESSERACT_EXE):
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE
+
     OCR_AVAILABLE = True
 except Exception:
     pytesseract = None
