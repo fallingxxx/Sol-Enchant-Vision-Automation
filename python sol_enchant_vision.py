@@ -1415,27 +1415,35 @@ NONE
 """
 
 
+# AUTO button is a fixed game UI control near the right-center edge.
+# We classify only the button state with VLM and never ask the model for coordinates.
+AUTO_ROI_X1 = 600
+AUTO_ROI_Y1 = 105
+AUTO_ROI_X2 = 720
+AUTO_ROI_Y2 = 220
+
+# Safe tap point inside the known AUTO control area.
+AUTO_TAP_VISION_X = 660
+AUTO_TAP_VISION_Y = 162
+
 AUTO_STATE_PROMPT = """
-Determine the state of the game's AUTO / 자동사냥 control.
+Inspect only the provided right-side AUTO / 자동사냥 control area.
 
-Return exactly ONE line.
-
-If AUTO is visibly active:
+Return exactly ONE line:
 ON|confidence
-
-If AUTO is visibly inactive and the AUTO button itself is clearly visible:
-OFF|x|y|confidence|reason
-
-If the state cannot be determined safely:
+or
+OFF|confidence
+or
 UNKNOWN
 
-Rules:
-- Do not guess.
-- ON means the game is already in automatic hunting mode.
-- OFF means AUTO must be tapped to start automatic hunting.
-- x,y must be the center of the AUTO button in the 720x324 image.
-- Do not use minimap, potion, inventory, chat, skill buttons, monsters, character, or decorative icons.
-- Confidence must be 0 to 1.
+ON = AUTO is visibly active.
+OFF = AUTO is visibly inactive and the AUTO control is clearly visible.
+UNKNOWN = state cannot be determined safely.
+
+Do not output coordinates.
+Do not guess.
+Ignore all other game UI.
+Confidence must be 0 to 1.
 """
 
 AUTO_STATE_RE = re.compile(
@@ -1444,17 +1452,25 @@ AUTO_STATE_RE = re.compile(
 )
 
 AUTO_OFF_RE = re.compile(
-    r"^OFF\\s*[|:]\\s*(\\d+)\\s*[|:]\\s*(\\d+)\\s*[|:]\\s*"
-    r"(100(?:\\.\\d+)?|[0-9]{1,2}(?:\\.\\d+)?)\\s*[|:]\\s*(.*)$",
+    r"^OFF\s*[|:]\s*(100(?:\.\d+)?|[0-9]{1,2}(?:\.\d+)?)\s*$",
     re.I,
 )
 
 
 def detect_auto_state(frame):
     try:
+        roi = frame[
+            AUTO_ROI_Y1:AUTO_ROI_Y2,
+            AUTO_ROI_X1:AUTO_ROI_X2
+        ]
+
+        if roi is None or roi.size == 0:
+            print("[AUTO UNKNOWN] empty ROI")
+            return None
+
         raw = ollama_text_with_image(
             AUTO_STATE_PROMPT,
-            frame,
+            roi,
         )
     except Exception as e:
         print("[AUTO ERROR]", repr(e))
@@ -1480,29 +1496,25 @@ def detect_auto_state(frame):
 
     m = AUTO_OFF_RE.match(raw)
     if m:
-        x = int(m.group(1))
-        y = int(m.group(2))
-        confidence = float(m.group(3))
+        confidence = float(m.group(1))
         if confidence > 1.0:
             confidence /= 100.0
 
-        if (
-            0 <= x < VISION_WIDTH
-            and 0 <= y < VISION_HEIGHT
-            and confidence >= AUTO_MIN_CONFIDENCE
-        ):
-            ax, ay = vision_to_adb(x, y)
+        if confidence >= AUTO_MIN_CONFIDENCE:
+            ax, ay = vision_to_adb(
+                AUTO_TAP_VISION_X,
+                AUTO_TAP_VISION_Y,
+            )
             return {
                 "state": "OFF",
-                "vision_x": x,
-                "vision_y": y,
+                "vision_x": AUTO_TAP_VISION_X,
+                "vision_y": AUTO_TAP_VISION_Y,
                 "adb_x": ax,
                 "adb_y": ay,
                 "confidence": confidence,
-                "reason": m.group(4).strip(),
             }
 
-        print("[AUTO UNKNOWN] OFF result failed safety validation")
+        print("[AUTO UNKNOWN] OFF confidence too low")
         return None
 
     print("[AUTO UNKNOWN] invalid response")
