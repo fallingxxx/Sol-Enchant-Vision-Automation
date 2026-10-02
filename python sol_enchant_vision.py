@@ -1538,6 +1538,11 @@ def verify_inventory(frame):
             text
         )
 
+        if is_vlm_failure(text):
+            print("[INV FAILURE] invalid/repeated model output")
+            restart_vlm_after_repeated_failure()
+            return None
+
 
 
         m = YES_NO_RE.search(
@@ -1547,7 +1552,7 @@ def verify_inventory(frame):
 
         if not m:
 
-            return False
+            return None
 
 
 
@@ -1677,7 +1682,7 @@ def verify_home(frame):
         m = YES_NO_RE.search(text)
 
         if not m:
-            return False
+            return None
 
         yes = m.group(1).upper() == "YES"
 
@@ -1754,6 +1759,11 @@ def verify_shop(frame):
         )
 
         print("[SHOP RAW]", text)
+
+        if is_vlm_failure(text):
+            print("[SHOP FAILURE] invalid/repeated model output")
+            restart_vlm_after_repeated_failure()
+            return None
 
         m = YES_NO_RE.search(text)
 
@@ -2326,6 +2336,9 @@ class VLMWorker:
                         self.cached_state_time = now
                         self.last_confirmed_state = state
                         self.last_confirmed_confidence = confidence
+                        self.stabilizer.confirmed = state
+                        self.stabilizer.previous = state
+                        self.stabilizer.count = 0
                         print("[UI TITLE CONFIRMED]", state)
                         return state, confidence
 
@@ -2498,9 +2511,22 @@ class VLMWorker:
             # Resolve the ambiguous item-grid case with both independent
             # verifiers. Inventory must not override an explicit SHOP title.
             # SHOP must not override a positively verified inventory screen.
-            inventory_verified = verify_inventory(frame)
+            inventory_result = verify_inventory(frame)
+            inventory_verified = bool(inventory_result)
 
-            if inventory_verified:
+            if inventory_result is None:
+
+                # VLM failure is not a real NO. Never let a second VLM
+                # request manufacture a contradictory state while the model
+                # is recovering.
+                if self.stabilizer.confirmed == "INVENTORY" or getattr(self, "last_confirmed_state", None) == "INVENTORY":
+                    state = "INVENTORY"
+                    confidence = 0.95
+                else:
+                    state = "NORMAL"
+                    confidence = 0.5
+
+            elif inventory_verified:
 
                 # An explicit OCR SHOP title is stronger than the generic
                 # inventory VLM response. Keep SHOP in that case.
@@ -2548,7 +2574,7 @@ class VLMWorker:
             if not explicit_shop_title:
                 inventory_candidate = verify_inventory(frame)
 
-                if inventory_candidate:
+                if inventory_candidate is True:
                     inventory_verified = True
                     print("[STATE OVERRIDE] SHOP -> INVENTORY")
                     state = "INVENTORY"
