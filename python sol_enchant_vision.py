@@ -1436,6 +1436,11 @@ AUTO_ON_CONFIRM_REQUIRED = 2
 AUTO_ON_VERIFY_TIMEOUT = 5.0
 AUTO_CHECK_INTERVAL = 0.5
 
+# Explicit real-device AUTO tap test.
+# This mode performs exactly one real ADB tap at the fixed AUTO control
+# coordinate after the video stream is confirmed alive.
+AUTO_TAP_TEST_TIMEOUT = 10.0
+
 def measure_auto_motion(frame):
     """
     Measure temporal visual change in the fixed AUTO control region.
@@ -1567,6 +1572,59 @@ def detect_auto_state(frame):
         "adb_y": ay,
         "confidence": confidence,
     }
+
+def run_auto_tap_test(capture, worker):
+    """
+    Perform exactly one real AUTO-button tap for hardware verification.
+
+    This is intentionally separate from normal AUTO detection so the user
+    can verify that ADB control reaches the physical device. It does not
+    use VLM and does not perform a second tap.
+    """
+    print("=" * 60)
+    print("SOL ENCHANT - REAL AUTO TAP TEST")
+    print("=" * 60)
+    print("[AUTO TAP TEST] waiting for video frame")
+
+    deadline = time.time() + AUTO_TAP_TEST_TIMEOUT
+    frame = None
+    frame_id = 0
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+        if frame is not None:
+            break
+        time.sleep(0.1)
+
+    if frame is None:
+        print("[AUTO TAP TEST] no video frame received")
+        return False
+
+    print("[AUTO TAP TEST] video OK frame_id=", frame_id)
+    print(
+        f"[AUTO TAP TEST] REAL TAP -> "
+        f"vision=({AUTO_TAP_VISION_X},{AUTO_TAP_VISION_Y})"
+    )
+
+    adb_x, adb_y = vision_to_adb(
+        AUTO_TAP_VISION_X,
+        AUTO_TAP_VISION_Y,
+    )
+
+    print(
+        f"[AUTO TAP TEST] ADB TAP -> "
+        f"({adb_x},{adb_y})"
+    )
+
+    success = worker.executor.tap(adb_x, adb_y)
+
+    if success:
+        print("[AUTO TAP TEST] SUCCESS -> adb shell input tap executed")
+    else:
+        print("[AUTO TAP TEST] FAILED -> ADB tap command failed")
+
+    return success
+
 
 def is_vlm_failure(raw):
     """Return True only when the VLM response is genuinely unusable."""
@@ -3204,6 +3262,7 @@ def main():
     single_ocr_test = "--ocr-test" in sys.argv
     target_test = "--target-test" in sys.argv
     auto_test = "--auto-test" in sys.argv
+    auto_tap_test = "--auto-tap-test" in sys.argv
 
     global TARGET_DIAGNOSTIC_ONLY
     TARGET_DIAGNOSTIC_ONLY = target_test
@@ -3214,6 +3273,8 @@ def main():
         print("[MODE] single-vlm-test")
     elif target_test:
         print("[MODE] target-test (NO TAP)")
+    elif auto_tap_test:
+        print("[MODE] auto-tap-test (REAL ADB TAP)")
     elif auto_test:
         print("[MODE] auto-test")
     else:
@@ -3228,6 +3289,10 @@ def main():
     elif single_vlm_test:
         print(
             "SOL ENCHANT SINGLE IMAGE VLM TEST"
+        )
+    elif auto_tap_test:
+        print(
+            "SOL ENCHANT REAL AUTO TAP TEST"
         )
     else:
 
@@ -3274,6 +3339,10 @@ def main():
 
         if single_vlm_test:
             run_single_vlm_test(capture)
+            return
+
+        if auto_tap_test:
+            run_auto_tap_test(capture, worker)
             return
 
         if auto_test:
