@@ -133,7 +133,7 @@ TARGET_RETRY_COUNT = 1
 DRY_RUN = False
 
 ENABLE_INVENTORY_ACTION = True
-ENABLE_SHOP_ACTION = False
+ENABLE_SHOP_ACTION = True
 ENABLE_HOME_ACTION = False
 
 
@@ -2764,9 +2764,16 @@ class VLMWorker:
 
             return
 
-        # SHOP is detection-only for now.
-        # Do not automatically close or interact with the shop
-        # until its recognition is verified on the real game screen.
+        if (
+            confirmed == "SHOP"
+            and ENABLE_SHOP_ACTION
+        ):
+
+            print("[ACTION] SHOP -> BACK")
+
+            self.executor.back()
+
+            return
 
         if (
             confirmed == "SHOP"
