@@ -1860,10 +1860,16 @@ class VLMWorker:
 
 
 
+        inventory_verified = False
+
+
         if state == "INVENTORY":
 
 
-            if not verify_inventory(frame):
+            inventory_verified = verify_inventory(frame)
+
+
+            if not inventory_verified:
 
                 print(
                     "[INVENTORY rejected]"
@@ -1875,12 +1881,35 @@ class VLMWorker:
 
 
 
-        confirmed, changed = (
-            self.stabilizer.update(
-                state,
-                confidence
+        if inventory_verified:
+
+            confirmed = "INVENTORY"
+
+            changed = (
+                self.stabilizer.confirmed
+                !=
+                "INVENTORY"
             )
-        )
+
+            self.stabilizer.confirmed = "INVENTORY"
+            self.stabilizer.previous = "INVENTORY"
+            self.stabilizer.count = 0
+
+            if changed:
+
+                print(
+                    "[STATE CHANGE]",
+                    "INVENTORY"
+                )
+
+        else:
+
+            confirmed, changed = (
+                self.stabilizer.update(
+                    state,
+                    confidence
+                )
+            )
 
 
 
