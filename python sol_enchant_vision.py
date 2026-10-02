@@ -1489,9 +1489,39 @@ def verify_inventory(frame):
     try:
 
 
+        # Build a visual probe that preserves the full screen while
+        # enlarging the tiny upper-left UI-title region. This addresses the
+        # exact failure mode where the full VLM sees an item grid and calls
+        # it SHOP, while the actual inventory title is too small to notice.
+        probe = frame
+        try:
+            h, w = frame.shape[:2]
+            title = frame[0:min(h, 64), 0:min(w, 180)]
+            title = cv2.resize(
+                title,
+                None,
+                fx=4.0,
+                fy=4.0,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            canvas_h = max(h, title.shape[0])
+            canvas_w = w + title.shape[1] + 8
+            probe = cv2.copyMakeBorder(
+                frame,
+                0,
+                canvas_h - h,
+                0,
+                title.shape[1] + 8,
+                cv2.BORDER_CONSTANT,
+                value=(0, 0, 0),
+            )
+            probe[0:title.shape[0], w + 8:w + 8 + title.shape[1]] = title
+        except Exception as e:
+            print("[INV PROBE ERROR]", e)
+
         result = ollama_chat(
             INVENTORY_PROMPT,
-            image=frame
+            image=probe
         )
 
 
