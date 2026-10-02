@@ -1143,22 +1143,19 @@ def ocr_screen(frame):
 
 
 def detect_ui_title(frame):
-    """Dedicated OCR for the upper-left Korean UI title."""
+    """Detect upper-left UI title with multi-pass OCR."""
     if not OCR_ENABLED or not OCR_AVAILABLE or frame is None:
         return None, 0.0
-
     try:
         h, w = frame.shape[:2]
         roi = frame[0:min(h, 170), 0:min(w, 430)]
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         enlarged = cv2.resize(gray, None, fx=5.0, fy=5.0, interpolation=cv2.INTER_CUBIC)
-
         variants = [
             enlarged,
             cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
             cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1],
         ]
-
         for image in variants:
             for psm in (6, 7, 11, 13):
                 text = pytesseract.image_to_string(image, lang=OCR_LANG, config=f"--psm {psm}")
@@ -1167,7 +1164,6 @@ def detect_ui_title(frame):
                     return "INVENTORY", 0.99
                 if "상점" in compact or "상인" in compact:
                     return "SHOP", 0.99
-
         return None, 0.0
     except Exception as e:
         print("[UI TITLE OCR ERROR]", repr(e))
