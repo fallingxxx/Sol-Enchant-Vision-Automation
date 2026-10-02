@@ -1417,7 +1417,6 @@ def verify_inventory(frame):
 
 
 HOME_VERIFY_PROMPT = """
-
 Is the player currently in the actual town/home/base area?
 
 Return ONLY one line.
@@ -1430,40 +1429,38 @@ or
 
 NO|0.95
 
-YES when the player is actually standing in the town/base/home area.
+YES only when the overall screenshot visually matches an actual
+town/home/base area.
 
-IMPORTANT GAME-SPECIFIC SIGNAL:
-The upper-right minimap displays "(안전)" when the player is normally
-in a safe town area. Treat a clearly visible "(안전)" marker on the
-upper-right map as a STRONG HOME/TOWN signal.
+IMPORTANT:
+The upper-right minimap may display "(안전)".
+"(안전)" means the current area is PK-disabled/a safe zone.
+It does NOT mean the player is necessarily in a town.
+Many towns normally show "(안전)", but other non-town safe areas
+can also show it.
 
-Use the "(안전)" marker together with the surrounding screen:
-- "(안전)" + town/non-combat environment -> YES
-- "(안전)" visible but a merchant shop or inventory panel is open -> NO
-- active combat UI/enemies clearly visible -> NO
+Therefore "(안전)" is supporting evidence only.
+Do NOT return YES from "(안전)" alone.
 
-Look for additional town context such as town buildings, streets,
-NPCs, shops/buildings, or a clearly non-combat town environment.
-
-Do NOT require a special HOME button or a literal word "HOME".
-The game may show the town only as a visual scene.
+Use additional visual context such as town buildings, streets,
+NPCs, shops/buildings, or a clearly recognizable town/base scene.
 
 NO when:
-- an active battle/combat scene is visible
+- active battle/combat is visible
 - enemies/target combat UI are present
 - the player is in the hunting/field area
 - inventory/equipment is open
 - a merchant shop is open
 - a general menu is open
+- only "(안전)" is visible without clear town/base context
 
-A town screen is NOT the same as a battle screen.
-If the screenshot visually shows the town and there is no active combat,
-return YES even if the normal state classifier said BATTLE.
+A town screen is NOT the same as a generic safe zone.
 
 If uncertain, return NO.
 
 Do not add explanations.
 """
+
 
 
 def verify_home(frame):
@@ -2121,29 +2118,28 @@ class VLMWorker:
 
         if state == "HOME":
 
-            home_verified = verify_home(frame)
+            # Do not repeatedly re-verify an already confirmed HOME state.
+            if self.stabilizer.confirmed != "HOME":
+                home_verified = verify_home(frame)
 
-            if not home_verified:
-
-                print("[HOME rejected]")
-
-                state = "NORMAL"
-                confidence = 0.8
+                if not home_verified:
+                    print("[HOME rejected]")
+                    state = "NORMAL"
+                    confidence = 0.8
 
 
         if state == "BATTLE":
 
-            # The broad classifier often calls the town BATTLE.
-            # Verify HOME before allowing a new BATTLE confirmation.
+            # BATTLE is the only candidate that needs HOME verification.
+            # "(안전)" alone is not enough: it only means PK-disabled
+            # safe zone and can exist outside town.
 
             home_verified = verify_home(frame)
 
             if home_verified:
-
                 print(
                     "[STATE OVERRIDE] BATTLE -> HOME"
                 )
-
                 state = "HOME"
                 confidence = 0.95
 
