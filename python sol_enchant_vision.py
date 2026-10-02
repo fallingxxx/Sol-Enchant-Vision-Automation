@@ -1420,17 +1420,17 @@ NONE
 # The game shows a rotating/glowing ring when AUTO is active and
 # the same ring becomes stationary when AUTO is inactive.
 # AUTO control is the small circular AUTO button above/right of the
-# main joystick. In the supplied 720x324 live frame it is centered
-# around Vision (610,170). The previous candidate (690,176) was visibly
-# to the right of the actual control.
+# main joystick. Image-based coordinate verification selected Vision
+# (628,176) for the supplied 720x324 frame. This is the latest confirmed
+# candidate from the AUTO grid diagnostic / real ADB tap test.
 AUTO_ROI_X1 = 575
 AUTO_ROI_Y1 = 125
 AUTO_ROI_X2 = 650
 AUTO_ROI_Y2 = 205
 
 # Safe tap point near the center of the visible AUTO control.
-AUTO_TAP_VISION_X = 610
-AUTO_TAP_VISION_Y = 170
+AUTO_TAP_VISION_X = 628
+AUTO_TAP_VISION_Y = 176
 
 AUTO_MOTION_THRESHOLD = 3.0
 AUTO_MOTION_MIN_ACTIVE_PIXELS = 0.02
