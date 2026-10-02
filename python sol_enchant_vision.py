@@ -1858,6 +1858,137 @@ def run_auto_touch_test(capture, worker):
     return False
 
 
+def run_auto_force_tap_test(capture, worker):
+    """
+    One-shot real AUTO tap test.
+
+    This is deliberately independent of:
+      - AUTO OFF detection
+      - OCR
+      - VLM
+      - motion classification
+
+    Purpose:
+      Verify whether the verified coordinate bridge reaches the actual
+      AUTO control and whether the game visibly changes after one tap.
+
+    Safety:
+      - exactly ONE real ADB tap
+      - NO automatic retap
+      - saves before/after frames for inspection
+    """
+    print("=" * 60)
+    print("SOL ENCHANT - ONE-SHOT REAL AUTO TAP TEST")
+    print("=" * 60)
+    print("[AUTO FORCE TAP] NO OCR / NO VLM / NO OFF DETECTION")
+    print("[AUTO FORCE TAP] exactly ONE real ADB tap will be sent")
+
+    deadline = time.time() + AUTO_TAP_TEST_TIMEOUT
+    last_frame_id = -1
+    before_frame = None
+    before_id = 0
+
+    while time.time() < deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id == last_frame_id:
+            time.sleep(0.05)
+            continue
+
+        before_frame = frame
+        before_id = frame_id
+        break
+
+    if before_frame is None:
+        print("[AUTO FORCE TAP] ERROR -> no video frame received")
+        return False
+
+    tap_vx = AUTO_TAP_VISION_X
+    tap_vy = AUTO_TAP_VISION_Y
+    adb_x, adb_y = vision_to_adb(tap_vx, tap_vy)
+
+    print(
+        f"[AUTO FORCE TAP] BEFORE frame_id={before_id} "
+        f"shape={before_frame.shape}"
+    )
+    print(
+        f"[AUTO FORCE TAP] VISION=({tap_vx},{tap_vy}) "
+        f"-> ADB=({adb_x},{adb_y})"
+    )
+
+    before_path = "auto_force_before.jpg"
+    cv2.imwrite(before_path, before_frame)
+    print("[AUTO FORCE TAP] saved ->", before_path)
+
+    print("[AUTO FORCE TAP] SENDING EXACTLY ONE REAL ADB TAP")
+    success = worker.executor.tap(adb_x, adb_y)
+
+    if not success:
+        print("[AUTO FORCE TAP] FAILED -> ADB tap command failed")
+        return False
+
+    print("[AUTO FORCE TAP] TAP COMMAND SUCCEEDED")
+    print("[AUTO FORCE TAP] NO SECOND TAP WILL BE SENT")
+    print("[AUTO FORCE TAP] waiting 2.0s for the game to react...")
+
+    after_deadline = time.time() + 2.0
+    after_frame = None
+    after_id = before_id
+
+    while time.time() < after_deadline:
+        frame, frame_id = capture.get_snapshot()
+
+        if frame is None or frame_id <= before_id:
+            time.sleep(0.05)
+            continue
+
+        after_frame = frame
+        after_id = frame_id
+        time.sleep(0.15)
+        latest, latest_id = capture.get_snapshot()
+        if latest is not None and latest_id > after_id:
+            after_frame = latest
+            after_id = latest_id
+        break
+
+    if after_frame is None:
+        print("[AUTO FORCE TAP] ERROR -> no post-tap video frame received")
+        return False
+
+    after_path = "auto_force_after.jpg"
+    cv2.imwrite(after_path, after_frame)
+    print("[AUTO FORCE TAP] saved ->", after_path)
+
+    # Report raw visual change in the AUTO ROI only.
+    x1 = max(0, AUTO_ROI_X1)
+    y1 = max(0, AUTO_ROI_Y1)
+    x2 = min(after_frame.shape[1], AUTO_ROI_X2)
+    y2 = min(after_frame.shape[0], AUTO_ROI_Y2)
+
+    before_roi = before_frame[y1:y2, x1:x2]
+    after_roi = after_frame[y1:y2, x1:x2]
+
+    if before_roi.size and after_roi.size:
+        before_gray = cv2.cvtColor(before_roi, cv2.COLOR_BGR2GRAY)
+        after_gray = cv2.cvtColor(after_roi, cv2.COLOR_BGR2GRAY)
+        diff = cv2.absdiff(before_gray, after_gray)
+        mean_diff = float(diff.mean())
+        changed_ratio = float((diff > 8).mean())
+
+        print(
+            f"[AUTO FORCE TAP] ROI change mean={mean_diff:.2f} "
+            f"changed_pixels={changed_ratio:.3f}"
+        )
+    else:
+        print("[AUTO FORCE TAP] ROI change unavailable")
+
+    print(
+        "[AUTO FORCE TAP] COMPLETE -> inspect the game and "
+        "auto_force_before.jpg / auto_force_after.jpg"
+    )
+    return True
+
+
 def run_auto_diagnostic(capture):
     """
     Passive AUTO-button geometry diagnostic.
@@ -3683,6 +3814,7 @@ def main():
     auto_test = "--auto-test" in sys.argv
     auto_tap_test = "--auto-tap-test" in sys.argv
     auto_touch_test = "--auto-touch-test" in sys.argv
+    auto_force_tap_test = "--auto-force-tap-test" in sys.argv
     auto_diagnostic = "--auto-diagnostic" in sys.argv
 
     global TARGET_DIAGNOSTIC_ONLY
@@ -3698,6 +3830,8 @@ def main():
         print("[MODE] auto-tap-test (REAL ADB TAP)")
     elif auto_touch_test:
         print("[MODE] auto-touch-test (REAL ADB 150ms PRESS)")
+    elif auto_force_tap_test:
+        print("[MODE] auto-force-tap-test (ONE REAL ADB TAP)")
     elif auto_diagnostic:
         print("[MODE] auto-diagnostic (NO TOUCH)")
     elif auto_test:
@@ -3722,6 +3856,10 @@ def main():
     elif auto_touch_test:
         print(
             "SOL ENCHANT REAL AUTO TOUCH-PRESS TEST"
+        )
+    elif auto_force_tap_test:
+        print(
+            "SOL ENCHANT ONE-SHOT REAL AUTO TAP TEST"
         )
     elif auto_diagnostic:
         print(
@@ -3780,6 +3918,10 @@ def main():
 
         if auto_touch_test:
             run_auto_touch_test(capture, worker)
+            return
+
+        if auto_force_tap_test:
+            run_auto_force_tap_test(capture, worker)
             return
 
         if auto_diagnostic:
