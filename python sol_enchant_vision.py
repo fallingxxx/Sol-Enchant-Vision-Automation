@@ -2402,9 +2402,10 @@ class VLMWorker:
                         self.stabilizer.count = 0
 
                     print("[UI TITLE CONFIRMED]", state)
-                    return state, confidence
 
-
+                    # Do not return here. The state still needs to pass through
+                    # the normal confirmation/action router below. Returning
+                    # here skips [STATE CHANGE] and therefore skips SHOP -> BACK.
                     # A positive NO is real evidence that the screen is SHOP.
                     self.inventory_title_override_count = 0
 
