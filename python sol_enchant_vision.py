@@ -448,6 +448,17 @@ def ollama_chat(
 
 
 
+def restart_vlm_after_repeated_failure():
+    """Enter a short VLM recovery cooldown without crashing the worker."""
+    global VLM_RECOVERY_UNTIL
+
+    VLM_RECOVERY_UNTIL = time.time() + VLM_FAILURE_COOLDOWN
+
+    print(
+        f"[VLM RECOVERY] cooldown {VLM_FAILURE_COOLDOWN:.1f}s"
+    )
+
+
 def ollama_text(prompt):
 
     result = ollama_chat(
